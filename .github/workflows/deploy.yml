@@ -49,11 +49,14 @@ jobs:
         with:
           project_id: ${{ secrets.PROJECT_ID }}
 
+      # 🛠 Debug step to see where run_analysis is located
       - name: Debug - Show repo file structure
         run: |
           echo "Current directory:"
           pwd
-          echo "Listing files:"
+          echo "Top level files:"
+          ls -l
+          echo "Full recursive listing:"
           ls -R
 
       - name: Deploy run_analysis Cloud Function
