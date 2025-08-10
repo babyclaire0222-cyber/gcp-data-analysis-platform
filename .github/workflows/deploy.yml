@@ -56,6 +56,6 @@ jobs:
             --trigger-http \
             --allow-unauthenticated \
             --region ${{ secrets.GCP_REGION }} \
-            --source ./gcp-data-analysis-platform/functions/run_analysis \
+            --source ./functions/run_analysis \
             --entry-point run_analysis \
             --set-env-vars "GCP_PROJECT=${{ secrets.PROJECT_ID }},BIGQUERY_DATASET=${{ secrets.BQ_DATASET }},BUCKET_NAME=${{ secrets.BUCKET_NAME }}"
