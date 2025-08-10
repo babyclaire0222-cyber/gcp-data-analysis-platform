@@ -1,76 +1,43 @@
-name: Deploy to GCP (Cloud Run + Cloud Functions)
+name: Deploy to GCP
 
 on:
   push:
     branches:
       - main
 
-env:
-  REGION: asia-southeast1
-  FRONTEND_SERVICE: data-analysis-webapp
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      # 1. Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Authenticate to Google Cloud
+      # 2. Authenticate with GCP
+      - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
           service_account_key: ${{ secrets.GCP_SA_KEY }}
-          export_default_credentials: true
+          project_id: ${{ secrets.PROJECT_ID }}
 
-      - name: Configure Docker auth for GCR
-        run: gcloud auth configure-docker
-
-      # ---------- Build & deploy frontend (Cloud Run) ----------
-      - name: Build Docker image for frontend (Cloud Run)
+      # 3. Deploy Cloud Run app
+      - name: Deploy to Cloud Run
         run: |
-          cd gcp-data-analysis-platform/webapp
-          gcloud builds submit --tag gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.FRONTEND_SERVICE }}
-
-      - name: Deploy frontend to Cloud Run
-        run: |
-          gcloud run deploy ${{ env.FRONTEND_SERVICE }} \
-            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.FRONTEND_SERVICE }} \
-            --region ${{ env.REGION }} \
+          gcloud run deploy data-analysis-webapp \
+            --source ./cloudrun-app \
+            --region ${{ secrets.GCP_REGION }} \
             --platform managed \
-            --allow-unauthenticated
+            --allow-unauthenticated \
+            --set-env-vars "GCP_PROJECT=${{ secrets.PROJECT_ID }},BUCKET_NAME=${{ secrets.BUCKET_NAME }},PUBSUB_TOPIC_FOR_SQL_IMPORT=${{ secrets.PUBSUB_TOPIC }}"
 
-      # ---------- Deploy Cloud Functions ----------
-      - name: Deploy process_upload Cloud Function
-        run: |
-          gcloud functions deploy process_upload \
-            --runtime python311 \
-            --trigger-resource ${BUCKET_NAME:-data-analysis-upload-1000} \
-            --trigger-event google.storage.object.finalize \
-            --region ${{ env.REGION }} \
-            --entry-point process_upload \
-            --source gcp-data-analysis-platform/functions/process_upload \
-            --set-env-vars GCP_PROJECT=${{ secrets.GCP_PROJECT_ID }},BIGQUERY_DATASET=${{ secrets.BIGQUERY_DATASET }},BUCKET_NAME=${{ secrets.BUCKET_NAME }},PUBSUB_TOPIC_FOR_SQL_IMPORT=${{ secrets.PUBSUB_TOPIC_FOR_SQL_IMPORT }}
-
-      - name: Deploy import_sql_to_cloudsql Cloud Function
-        run: |
-          gcloud functions deploy import_sql_to_cloudsql \
-            --runtime python311 \
-            --trigger-topic ${PUBSUB_TOPIC:-sql-import-topic} \
-            --entry-point import_sql \
-            --region ${{ env.REGION }} \
-            --source gcp-data-analysis-platform/functions/import_sql_to_cloudsql \
-            --set-env-vars GCP_PROJECT=${{ secrets.GCP_PROJECT_ID }},BUCKET_NAME=${{ secrets.BUCKET_NAME }},CLOUDSQL_INSTANCE=${{ secrets.CLOUDSQL_INSTANCE }},CLOUDSQL_DATABASE=${{ secrets.CLOUDSQL_DATABASE }},REGION=${{ env.REGION }}
-
+      # 4. Deploy run_analysis Cloud Function
       - name: Deploy run_analysis Cloud Function
         run: |
           gcloud functions deploy run_analysis \
             --runtime python311 \
             --trigger-http \
             --allow-unauthenticated \
+            --region ${{ secrets.GCP_REGION }} \
+            --source ./run_analysis \
             --entry-point run_analysis \
-            --region ${{ env.REGION }} \
-            --source gcp-data-analysis-platform/functions/run_analysis \
-            --set-env-vars GCP_PROJECT=${{ secrets.GCP_PROJECT_ID }},BIGQUERY_DATASET=${{ secrets.BIGQUERY_DATASET }},BUCKET_NAME=${{ secrets.BUCKET_NAME }}
-
+            --set-env-vars "GCP_PROJECT=${{ secrets.PROJECT_ID }},BIGQUERY_DATASET=${{ secrets.BQ_DATASET }},BUCKET_NAME=${{ secrets.BUCKET_NAME }}"
