@@ -1,4 +1,4 @@
-name: Deploy to GCP
+name: Deploy Cloud Function
 
 on:
   push:
@@ -6,32 +6,6 @@ on:
       - main
 
 jobs:
-  deploy-cloudrun:
-    runs-on: ubuntu-latest
-    if: contains(github.event.head_commit.message, '[deploy-cloudrun]') || github.event_name == 'push'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up gcloud CLI
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ secrets.PROJECT_ID }}
-
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy data-analysis-webapp \
-            --source ./gcp-data-analysis-platform/cloudrun-app \
-            --region ${{ secrets.GCP_REGION }} \
-            --platform managed \
-            --allow-unauthenticated \
-            --set-env-vars "GCP_PROJECT=${{ secrets.PROJECT_ID }},BUCKET_NAME=${{ secrets.BUCKET_NAME }},PUBSUB_TOPIC_FOR_SQL_IMPORT=${{ secrets.PUBSUB_TOPIC }}"
-
   deploy-cloudfunction:
     runs-on: ubuntu-latest
     if: contains(github.event.head_commit.message, '[deploy-function]') || github.event_name == 'push'
@@ -49,16 +23,29 @@ jobs:
         with:
           project_id: ${{ secrets.PROJECT_ID }}
 
-      # 🛠 Debug step to see where run_analysis is located
+      # 🛠 Debug: show repo file structure
       - name: Debug - Show repo file structure
         run: |
           echo "Current directory:"
           pwd
           echo "Top level files:"
           ls -l
-          echo "Full recursive listing:"
+          echo "Recursive listing:"
           ls -R
 
+      # 🔍 Auto-detect Cloud Function path
+      - name: Detect run_analysis folder
+        id: detect_path
+        run: |
+          FUNCTION_PATH=$(find . -type d -name "run_analysis" | head -n 1)
+          if [ -z "$FUNCTION_PATH" ]; then
+            echo "❌ Could not find run_analysis folder"
+            exit 1
+          fi
+          echo "✅ Found function path: $FUNCTION_PATH"
+          echo "FUNCTION_PATH=$FUNCTION_PATH" >> $GITHUB_ENV
+
+      # 🚀 Deploy Cloud Function
       - name: Deploy run_analysis Cloud Function
         run: |
           gcloud functions deploy run_analysis \
@@ -66,6 +53,6 @@ jobs:
             --trigger-http \
             --allow-unauthenticated \
             --region ${{ secrets.GCP_REGION }} \
-            --source ./gcp-data-analysis-platform/functions/run_analysis \
+            --source "$FUNCTION_PATH" \
             --entry-point run_analysis \
             --set-env-vars "GCP_PROJECT=${{ secrets.PROJECT_ID }},BIGQUERY_DATASET=${{ secrets.BQ_DATASET }},BUCKET_NAME=${{ secrets.BUCKET_NAME }}"
