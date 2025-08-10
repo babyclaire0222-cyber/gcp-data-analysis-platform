@@ -23,6 +23,11 @@ jobs:
         with:
           project_id: ${{ secrets.PROJECT_ID }}
 
+      - name: Debug - List repo files
+        run: |
+          pwd
+          ls -R
+
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy data-analysis-webapp \
@@ -48,6 +53,11 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.PROJECT_ID }}
+
+      - name: Debug - List repo files
+        run: |
+          pwd
+          ls -R
 
       - name: Deploy run_analysis Cloud Function
         run: |
