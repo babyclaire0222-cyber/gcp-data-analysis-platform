@@ -36,6 +36,12 @@ def run_analysis(table_name):
     """Runs a fresh analysis query, saves results to GCS and BigQuery."""
     ensure_dataset_exists(BIGQUERY_DATASET)
 
+    # Check if table exists
+    try:
+        bq_client.get_table(f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}")
+    except Exception:
+        raise ValueError(f"BigQuery table {table_name} not found.")
+
     query = f"SELECT * FROM `{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}` LIMIT 10"
     results = bq_client.query(query).result()
 
@@ -66,7 +72,7 @@ def run_analysis(table_name):
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
-        uploaded_file = request.files['file']
+        uploaded_file = request.files.get('file')
         if uploaded_file:
             file_path = f"/tmp/{uploaded_file.filename}"
             uploaded_file.save(file_path)
@@ -82,7 +88,11 @@ def index():
                 publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
 
             table_name = os.path.splitext(uploaded_file.filename)[0]
-            run_analysis(table_name)
+
+            try:
+                run_analysis(table_name)
+            except ValueError as e:
+                return str(e), 400
 
             return f"""
                 Uploaded {uploaded_file.filename}<br>
@@ -108,12 +118,14 @@ def download_file(filename):
 
 @app.route('/download_bq')
 def download_bq():
-    """Run fresh analysis and send CSV from BigQuery *_analysis table."""
     table_name = request.args.get("table")
     if not table_name:
         return "Missing ?table parameter.", 400
 
-    run_analysis(table_name)  # Always refresh before download
+    try:
+        run_analysis(table_name)
+    except ValueError as e:
+        return str(e), 400
 
     query = f"SELECT * FROM `{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}_analysis`"
     results = bq_client.query(query).result()
@@ -129,5 +141,5 @@ def download_bq():
     return send_file(temp_path, mimetype='text/csv', as_attachment=True, download_name=f"{table_name}_analysis.csv")
 
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
+
