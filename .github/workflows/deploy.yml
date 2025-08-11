@@ -1,44 +1,78 @@
-name: Deploy to Cloud Run
+name: Deploy to Cloud Run & Cloud Functions
 
 on:
   push:
     branches:
-      - main  # or your deployment branch
+      - main
 
 env:
-  GCP_PROJECT: data-analysis-webapp
+  PROJECT_ID: data-analysis-webapp
   REGION: asia-southeast1
   SERVICE_NAME: data-analysis-webapp
+  REPO_NAME: cloud-run-repo
+  IMAGE_NAME: webapp
+  FUNCTION_NAME: run_analysis
+  FUNCTION_PATH: functions/run_analysis
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      # Checkout repository
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Set up gcloud
+      # Authenticate with GCP
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # Setup gcloud CLI
+      - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ env.GCP_PROJECT }}
-          service_account_key: ${{ secrets.GCP_SA_KEY }}
-          export_default_credentials: true
+          project_id: ${{ env.PROJECT_ID }}
 
-      - name: Authorize Docker to push to GCR
-        run: gcloud auth configure-docker asia.gcr.io
+      # Enable Artifact Registry auth
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker asia-southeast1-docker.pkg.dev --quiet
 
-      - name: Build Docker image
+      # Build and push Docker image for Cloud Run
+      - name: Build & Push Docker Image
         run: |
-          IMAGE="asia.gcr.io/${{ env.GCP_PROJECT }}/${{ env.SERVICE_NAME }}"
-          docker build -t $IMAGE ./webapp
-          docker push $IMAGE
+          IMAGE_URI=asia-southeast1-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/${IMAGE_NAME}:$GITHUB_SHA
+          docker build -t $IMAGE_URI ./webapp
+          docker push $IMAGE_URI
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
+      # Deploy to Cloud Run
       - name: Deploy to Cloud Run
         run: |
-          IMAGE="asia.gcr.io/${{ env.GCP_PROJECT }}/${{ env.SERVICE_NAME }}"
-          gcloud run deploy ${{ env.SERVICE_NAME }} \
-            --image $IMAGE \
-            --region ${{ env.REGION }} \
+          gcloud run deploy $SERVICE_NAME \
+            --image $IMAGE_URI \
+            --region $REGION \
             --platform managed \
             --allow-unauthenticated
+
+      # Output Cloud Run URL
+      - name: Get Cloud Run URL
+        run: |
+          RUN_URL=$(gcloud run services describe $SERVICE_NAME \
+            --region $REGION \
+            --format 'value(status.url)')
+          echo "🚀 Cloud Run URL: $RUN_URL"
+          echo "RUN_URL=$RUN_URL" >> $GITHUB_ENV
+
+      # Deploy Cloud Function
+      - name: Deploy Cloud Function
+        run: |
+          gcloud functions deploy $FUNCTION_NAME \
+            --region $REGION \
+            --runtime python311 \
+            --trigger-http \
+            --allow-unauthenticated \
+            --source $FUNCTION_PATH \
+            --entry-point run_analysis \
+            --set-env-vars "GCP_PROJECT=${PROJECT_ID},BIGQUERY_DATASET=analysis_dataset,BUCKET_NAME=data-analysis-upload-1000"
