@@ -1,7 +1,7 @@
 # Use official Python slim image
 FROM python:3.9-slim
 
-# Set environment variables
+# Prevent Python from writing pyc files and enable stdout flushing
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
@@ -29,6 +29,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # Copy application files
 COPY . .
 
-# Run Flask app using Gunicorn (main.py is at /app inside container)
+# IMPORTANT:
+#   The CMD must point to the Flask app object inside webapp/main.py
+#   'webapp.main:app' means "from webapp/main.py import app"
 CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 main:app
-
