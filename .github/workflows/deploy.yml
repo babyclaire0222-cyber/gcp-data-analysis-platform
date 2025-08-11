@@ -1,4 +1,4 @@
-name: Deploy to Cloud Run & Cloud Functions
+name: Deploy to Cloud Run
 
 on:
   push:
@@ -19,60 +19,43 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout repository
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Authenticate with GCP
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # Setup gcloud CLI
-      - name: Setup gcloud
+      - name: Configure gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.PROJECT_ID }}
+          install_components: "beta"
 
-      # Enable Artifact Registry auth
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker asia-southeast1-docker.pkg.dev --quiet
+        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
 
-      # Build and push Docker image for Cloud Run
       - name: Build & Push Docker Image
         run: |
-          IMAGE_URI=asia-southeast1-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/${IMAGE_NAME}:$GITHUB_SHA
-          docker build -t $IMAGE_URI ./webapp
+          IMAGE_URI=${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/${IMAGE_NAME}:$GITHUB_SHA
+          docker build -f webapp/Dockerfile -t $IMAGE_URI ./webapp
           docker push $IMAGE_URI
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
 
-      # Deploy to Cloud Run
       - name: Deploy to Cloud Run
         run: |
-          gcloud run deploy $SERVICE_NAME \
+          gcloud run deploy ${SERVICE_NAME} \
             --image $IMAGE_URI \
-            --region $REGION \
+            --region ${REGION} \
             --platform managed \
-            --allow-unauthenticated
-
-      # Output Cloud Run URL
-      - name: Get Cloud Run URL
-        run: |
-          RUN_URL=$(gcloud run services describe $SERVICE_NAME \
-            --region $REGION \
-            --format 'value(status.url)')
-          echo "🚀 Cloud Run URL: $RUN_URL"
-          echo "RUN_URL=$RUN_URL" >> $GITHUB_ENV
-
-      # Deploy Cloud Function
-      - name: Deploy Cloud Function
-        run: |
-          gcloud functions deploy $FUNCTION_NAME \
-            --region $REGION \
-            --runtime python311 \
-            --trigger-http \
             --allow-unauthenticated \
-            --source $FUNCTION_PATH \
-            --entry-point run_analysis \
-            --set-env-vars "GCP_PROJECT=${PROJECT_ID},BIGQUERY_DATASET=analysis_dataset,BUCKET_NAME=data-analysis-upload-1000"
+            --set-env-vars "GCP_PROJECT=${PROJECT_ID},BIGQUERY_DATASET=analysis_dataset,BUCKET_NAME=data-analysis-upload-1000,PUBSUB_TOPIC_FOR_SQL_IMPORT=sql-import-topic"
+
+      - name: Show Cloud Run URL
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${SERVICE_NAME} \
+            --region ${REGION} \
+            --format 'value(status.url)')
+          echo "Cloud Run service deployed successfully!"
+          echo "Service URL: $SERVICE_URL"
