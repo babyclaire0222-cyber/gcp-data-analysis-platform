@@ -1,99 +1,37 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Data Analysis Web App</title>
+    <title>Data Analysis Upload</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 40px;
-            background-color: #f9f9f9;
-        }
-        h1 {
-            color: #333;
-        }
-        form {
-            background: #fff;
-            padding: 20px;
-            border-radius: 6px;
-            box-shadow: 0px 2px 5px rgba(0,0,0,0.1);
-            width: 400px;
-            margin-bottom: 20px;
-        }
-        input[type="file"], input[type="text"] {
-            display: block;
-            margin-bottom: 15px;
-            width: 100%;
-            padding: 8px;
-            box-sizing: border-box;
-        }
-        button {
-            padding: 10px 15px;
-            background-color: #4CAF50;
-            border: none;
-            color: white;
-            font-size: 14px;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #45a049;
-        }
-        .note {
-            font-size: 0.9em;
-            color: #666;
-            margin-top: 8px;
-        }
-        .message {
-            padding: 10px;
-            margin-bottom: 20px;
-            border-radius: 4px;
-        }
-        .success {
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        .error {
-            background-color: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        h1 { color: #333; }
+        .flash-message { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
+        .flash-success { background-color: #d4edda; color: #155724; }
+        .flash-error { background-color: #f8d7da; color: #721c24; }
+        form { margin-bottom: 20px; }
     </style>
 </head>
 <body>
+    <h1>Upload File for Analysis</h1>
 
-    <h1>Data Analysis Web App</h1>
-
-    <!-- Display flash messages -->
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
         {% for category, message in messages %}
-          <div class="message {{ category }}">
-            {{ message }}
-          </div>
+          <div class="flash-message flash-{{ category }}">{{ message }}</div>
         {% endfor %}
       {% endif %}
     {% endwith %}
 
-    <!-- Upload form -->
-    <form method="POST" enctype="multipart/form-data">
-        <label for="file">Upload a file (.csv or .sql):</label>
-        <input type="file" name="file" id="file" required>
-        <button type="submit">Upload & Run Analysis</button>
-        <p class="note">
-            - CSV: Will be uploaded and analyzed.<br>
-            - SQL: Will be uploaded, then triggers import before analysis.
-        </p>
+    <form action="/" method="post" enctype="multipart/form-data">
+        <input type="file" name="file" required>
+        <button type="submit">Upload</button>
     </form>
 
-    <!-- Download form -->
-    <h2>Download Latest BigQuery Analysis</h2>
-    <form action="/download_bq" method="GET">
-        <label for="table">Enter table name:</label>
-        <input type="text" name="table" id="table" required>
-        <button type="submit">Download CSV</button>
+    <h2>Manual BigQuery Download</h2>
+    <form action="/download_bq" method="get">
+        <input type="text" name="table" placeholder="Enter table name" required>
+        <button type="submit">Download Latest Analysis</button>
     </form>
-
 </body>
 </html>
 
