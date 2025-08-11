@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, send_file
+from flask import Flask, request, render_template, send_file, flash, redirect, url_for
 import os
 import json
 import csv
@@ -6,6 +6,7 @@ from google.cloud import storage, bigquery
 from google.cloud import pubsub_v1
 
 app = Flask(__name__)
+app.secret_key = "supersecretkey"  # Required for flash messages
 
 # GCP configuration
 PROJECT_ID = os.environ.get('GCP_PROJECT', 'data-analysis-webapp')
@@ -73,33 +74,43 @@ def run_analysis(table_name):
 def index():
     if request.method == 'POST':
         uploaded_file = request.files.get('file')
-        if uploaded_file:
-            file_path = f"/tmp/{uploaded_file.filename}"
-            uploaded_file.save(file_path)
+        if not uploaded_file:
+            flash("No file uploaded.", "error")
+            return redirect(url_for('index'))
 
-            # Upload to GCS
+        file_path = f"/tmp/{uploaded_file.filename}"
+        uploaded_file.save(file_path)
+
+        # Upload to GCS
+        try:
             bucket = storage_client.bucket(BUCKET_NAME)
             blob = bucket.blob(uploaded_file.filename)
             blob.upload_from_filename(file_path)
+        except Exception as e:
+            flash(f"Failed to upload to GCS: {e}", "error")
+            return redirect(url_for('index'))
 
-            # If SQL file, trigger import
-            if uploaded_file.filename.endswith('.sql'):
+        # If SQL file, trigger import
+        if uploaded_file.filename.endswith('.sql'):
+            try:
                 message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
                 publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
+            except Exception as e:
+                flash(f"Failed to publish SQL import message: {e}", "error")
+                return redirect(url_for('index'))
 
-            table_name = os.path.splitext(uploaded_file.filename)[0]
+        table_name = os.path.splitext(uploaded_file.filename)[0]
 
-            try:
-                run_analysis(table_name)
-            except ValueError as e:
-                return str(e), 400
+        try:
+            run_analysis(table_name)
+            flash(f"Uploaded {uploaded_file.filename} and analysis complete.", "success")
+        except ValueError as e:
+            flash(str(e), "error")
+        except Exception as e:
+            flash(f"Unexpected error: {e}", "error")
 
-            return f"""
-                Uploaded {uploaded_file.filename}<br>
-                Analysis complete.<br><br>
-                <a href='/download/{table_name}_results.csv'>Download GCS Analysis Results</a><br>
-                <a href='/download_bq?table={table_name}'>Download Latest Looker Studio Result (CSV)</a>
-            """
+        return redirect(url_for('index'))
+
     return render_template('index.html')
 
 
@@ -109,7 +120,8 @@ def download_file(filename):
     blob = bucket.blob(f"analysis_results/{filename}")
 
     if not blob.exists():
-        return f"File {filename} not found in analysis_results folder.", 404
+        flash(f"File {filename} not found in analysis_results folder.", "error")
+        return redirect(url_for('index'))
 
     temp_path = f"/tmp/{filename}"
     blob.download_to_filename(temp_path)
@@ -120,12 +132,17 @@ def download_file(filename):
 def download_bq():
     table_name = request.args.get("table")
     if not table_name:
-        return "Missing ?table parameter.", 400
+        flash("Missing ?table parameter.", "error")
+        return redirect(url_for('index'))
 
     try:
         run_analysis(table_name)
     except ValueError as e:
-        return str(e), 400
+        flash(str(e), "error")
+        return redirect(url_for('index'))
+    except Exception as e:
+        flash(f"Unexpected error: {e}", "error")
+        return redirect(url_for('index'))
 
     query = f"SELECT * FROM `{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}_analysis`"
     results = bq_client.query(query).result()
@@ -139,6 +156,10 @@ def download_bq():
             writer.writerow(list(row.values()))
 
     return send_file(temp_path, mimetype='text/csv', as_attachment=True, download_name=f"{table_name}_analysis.csv")
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
 
 
