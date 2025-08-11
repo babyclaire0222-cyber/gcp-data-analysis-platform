@@ -1,9 +1,15 @@
 # Use official Python slim image
 FROM python:3.9-slim
 
-# Environment variables for performance/logging
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+# Set environment variables to avoid writing pyc files and enable stdout flushing
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Default environment variables (can be overridden in Cloud Run)
+ENV GCP_PROJECT=data-analysis-webapp \
+    BUCKET_NAME=data-analysis-upload-1000 \
+    PUBSUB_TOPIC_FOR_SQL_IMPORT=sql-import-topic \
+    BIGQUERY_DATASET=analysis_dataset
 
 # Set working directory
 WORKDIR /app
@@ -15,17 +21,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install dependencies
+# Copy and install dependencies first (better caching)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir gunicorn
 
-# Copy application source
+# Copy application files
 COPY . .
 
-# Ensure Cloud Run can access the correct port
-EXPOSE 8080
-
-# Start Gunicorn (Cloud Run sets $PORT automatically)
-CMD ["gunicorn", "--bind", ":${PORT}", "--workers", "1", "--threads", "8", "--timeout", "0", "main:app"]
+# Use gunicorn for serving Flask on Cloud Run
+# Cloud Run will set $PORT automatically
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 main:app
 
