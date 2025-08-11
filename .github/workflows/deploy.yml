@@ -3,38 +3,42 @@ name: Deploy to Cloud Run
 on:
   push:
     branches:
-      - main  # Deploy when pushing to main branch
+      - main  # or your deployment branch
+
+env:
+  GCP_PROJECT: data-analysis-webapp
+  REGION: asia-southeast1
+  SERVICE_NAME: data-analysis-webapp
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Set up Google Cloud SDK
-      uses: google-github-actions/setup-gcloud@v2
-      with:
-        project_id: ${{ secrets.GCP_PROJECT_ID }}
-        service_account_key: ${{ secrets.GCP_SA_KEY }}
-        export_default_credentials: true
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          export_default_credentials: true
 
-    - name: Configure Docker authentication
-      run: gcloud auth configure-docker asia.gcr.io
+      - name: Authorize Docker to push to GCR
+        run: gcloud auth configure-docker asia.gcr.io
 
-    - name: Build and push Docker image
-      run: |
-        IMAGE="asia.gcr.io/${{ secrets.GCP_PROJECT_ID }}/data-analysis-webapp"
-        docker build -t $IMAGE .
-        docker push $IMAGE
+      - name: Build Docker image
+        run: |
+          IMAGE="asia.gcr.io/${{ env.GCP_PROJECT }}/${{ env.SERVICE_NAME }}"
+          docker build -t $IMAGE ./webapp
+          docker push $IMAGE
 
-    - name: Deploy to Cloud Run
-      run: |
-        IMAGE="asia.gcr.io/${{ secrets.GCP_PROJECT_ID }}/data-analysis-webapp"
-        gcloud run deploy data-analysis-webapp \
-          --image $IMAGE \
-          --region asia-southeast1 \
-          --platform managed \
-          --allow-unauthenticated \
-          --set-env-vars "GCP_PROJECT=${{ secrets.GCP_PROJECT_ID }},BIGQUERY_DATASET=analysis_dataset,BUCKET_NAME=data-analysis-upload-1000,PUBSUB_TOPIC_FOR_SQL_IMPORT=sql-import-topic"
+      - name: Deploy to Cloud Run
+        run: |
+          IMAGE="asia.gcr.io/${{ env.GCP_PROJECT }}/${{ env.SERVICE_NAME }}"
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image $IMAGE \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated
