@@ -1,9 +1,9 @@
 # Use official Python slim image
 FROM python:3.9-slim
 
-# Set environment variables to avoid writing pyc files and enable stdout flushing
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Environment variables for performance/logging
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 # Set working directory
 WORKDIR /app
@@ -15,14 +15,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install dependencies first (better caching)
+# Copy requirements and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir gunicorn
 
-# Copy application files
+# Copy application source
 COPY . .
 
-# Use gunicorn for serving Flask on Cloud Run
-# Cloud Run will set $PORT automatically
-CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 app:app
+# Ensure Cloud Run can access the correct port
+EXPOSE 8080
+
+# Start Gunicorn (Cloud Run sets $PORT automatically)
+CMD ["gunicorn", "--bind", ":${PORT}", "--workers", "1", "--threads", "8", "--timeout", "0", "main:app"]
+
