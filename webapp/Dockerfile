@@ -1,47 +1,34 @@
-name: Deploy to Cloud Run
+# Use official Python slim image
+FROM python:3.9-slim
 
-on:
-  push:
-    branches:
-      - main
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-env:
-  GCP_PROJECT: data-analysis-webapp
-  REGION: asia-southeast1
-  SERVICE_NAME: data-analysis-webapp
-  REPO_NAME: cloud-run-artifacts # Artifact Registry repo name
+# Default GCP environment variables (can be overridden in Cloud Run)
+ENV GCP_PROJECT=data-analysis-webapp \
+    BIGQUERY_DATASET=analysis_dataset \
+    BUCKET_NAME=data-analysis-upload-1000 \
+    PUBSUB_TOPIC_FOR_SQL_IMPORT=sql-import-topic
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+# Set working directory
+WORKDIR /app
 
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+# Install system dependencies for Google Cloud Python libs
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-      - name: Set up gcloud CLI
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ env.GCP_PROJECT }}
-          service_account_key: ${{ secrets.GCP_SA_KEY }}
-          export_default_credentials: true
+# Copy and install dependencies first (better caching)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir gunicorn
 
-      - name: Configure Docker for Artifact Registry
-        run: |
-          gcloud auth configure-docker asia-southeast1-docker.pkg.dev --quiet
+# Copy application files
+COPY . .
 
-      - name: Build and push Docker image
-        run: |
-          IMAGE="asia-southeast1-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.REPO_NAME }}/${{ env.SERVICE_NAME }}"
-          docker build -t $IMAGE ./webapp
-          docker push $IMAGE
-
-      - name: Deploy to Cloud Run
-        run: |
-          IMAGE="asia-southeast1-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.REPO_NAME }}/${{ env.SERVICE_NAME }}"
-          gcloud run deploy ${{ env.SERVICE_NAME }} \
-            --image $IMAGE \
-            --region ${{ env.REGION }} \
-            --platform managed \
-            --allow-unauthenticated
+# Run Flask app using Gunicorn (main.py is at /app inside container)
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 main:app
 
