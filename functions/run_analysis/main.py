@@ -1,5 +1,4 @@
 import os
-import csv
 from google.cloud import bigquery, storage
 from flask import Request
 
@@ -10,7 +9,7 @@ BUCKET_NAME = os.environ.get('BUCKET_NAME', 'data-analysis-upload-1000')
 bq_client = bigquery.Client()
 storage_client = storage.Client()
 
-# Define a fixed schema for Looker Studio table
+# Define a fixed schema for Looker Studio table (if needed)
 FIXED_SCHEMA = [
     bigquery.SchemaField("column1", "STRING"),
     bigquery.SchemaField("column2", "INTEGER"),
@@ -18,26 +17,46 @@ FIXED_SCHEMA = [
     bigquery.SchemaField("column4", "TIMESTAMP")
 ]
 
-def ensure_dataset_exists(dataset_id):
-    """Create dataset if it doesn't already exist."""
-    dataset_ref = bq_client.dataset(dataset_id)
+def create_table_from_csv_if_not_exists(table_name):
+    """Creates a BigQuery table from a CSV in GCS if it doesn't exist."""
+    table_ref = bq_client.dataset(BIGQUERY_DATASET).table(table_name)
     try:
-        bq_client.get_dataset(dataset_ref)
+        bq_client.get_table(table_ref)
+        return  # Table already exists
     except Exception:
-        dataset = bigquery.Dataset(dataset_ref)
-        dataset.location = "US"
-        bq_client.create_dataset(dataset)
-        print(f"Dataset {dataset_id} created.")
+        print(f"Table {table_name} not found. Searching for CSV in GCS...")
 
-def ensure_table_exists(dataset_id, table_name, schema):
-    """Create table with given schema if it doesn't already exist."""
-    table_id = f"{PROJECT_ID}.{dataset_id}.{table_name}"
-    try:
-        bq_client.get_table(table_id)
-    except Exception:
-        table = bigquery.Table(table_id, schema=schema)
-        table = bq_client.create_table(table)
-        print(f"Table {table_id} created with fixed schema.")
+    # Possible CSV paths
+    possible_paths = [
+        f"{table_name}.csv",
+        f"uploads/{table_name}.csv",
+        f"data/{table_name}.csv",
+        f"raw/{table_name}.csv"
+    ]
+
+    bucket = storage_client.bucket(BUCKET_NAME)
+    csv_uri = None
+
+    for path in possible_paths:
+        blob = bucket.blob(path)
+        if blob.exists():
+            csv_uri = f"gs://{BUCKET_NAME}/{path}"
+            print(f"Found CSV at {path}")
+            break
+
+    if not csv_uri:
+        raise ValueError(f"No CSV file found in GCS for table {table_name}")
+
+    # Load into BigQuery with autodetect schema
+    job_config = bigquery.LoadJobConfig(
+        source_format=bigquery.SourceFormat.CSV,
+        skip_leading_rows=1,
+        autodetect=True
+    )
+
+    load_job = bq_client.load_table_from_uri(csv_uri, table_ref, job_config=job_config)
+    load_job.result()
+    print(f"Created BigQuery table {table_name} from CSV: {csv_uri}")
 
 def run_analysis(request: Request):
     table_name = request.args.get('table')
@@ -45,14 +64,12 @@ def run_analysis(request: Request):
     if not table_name:
         return "Missing 'table' query parameter. Example: ?table=my_table", 400
 
-    # Make sure dataset and table exist
-    ensure_dataset_exists(BIGQUERY_DATASET)
-    ensure_table_exists(BIGQUERY_DATASET, table_name, FIXED_SCHEMA)
+    # Ensure table exists (create if CSV available)
+    create_table_from_csv_if_not_exists(table_name)
 
-    # Build query dynamically
+    # Query first 10 rows
     query = f"SELECT * FROM `{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}` LIMIT 10"
-    query_job = bq_client.query(query)
-    results = query_job.result()
+    results = bq_client.query(query).result()
 
     # Save results to CSV in /tmp
     result_file = "/tmp/results.csv"
@@ -62,7 +79,7 @@ def run_analysis(request: Request):
         for row in results:
             f.write(",".join([str(x) for x in row.values()]) + "\n")
 
-    # Upload CSV to GCS
+    # Upload analysis results to GCS
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(f"analysis_results/{table_name}_results.csv")
     blob.upload_from_filename(result_file)
@@ -85,5 +102,4 @@ def run_analysis(request: Request):
         f"Results saved to GCS and BigQuery table '{table_name}_analysis'.\n"
         f"Connect Looker Studio to: {destination_table}"
     )
-
 
