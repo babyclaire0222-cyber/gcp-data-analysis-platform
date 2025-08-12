@@ -33,11 +33,30 @@ def ensure_dataset_exists(dataset_id):
         print(f"Dataset {dataset_id} created.")
 
 
+def create_table_from_csv_if_not_exists(table_name, csv_path):
+    """Create BigQuery table from uploaded CSV if it doesn't exist."""
+    ensure_dataset_exists(BIGQUERY_DATASET)
+    table_ref = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}"
+    try:
+        bq_client.get_table(table_ref)
+        print(f"Table {table_ref} already exists.")
+    except Exception:
+        job_config = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.CSV,
+            skip_leading_rows=1,
+            autodetect=True,
+            write_disposition=bigquery.WriteDisposition.WRITE_EMPTY
+        )
+        with open(csv_path, "rb") as source_file:
+            load_job = bq_client.load_table_from_file(source_file, table_ref, job_config=job_config)
+        load_job.result()
+        print(f"Table {table_ref} created from CSV.")
+
+
 def run_analysis(table_name):
     """Runs a fresh analysis query, saves results to GCS and BigQuery."""
     ensure_dataset_exists(BIGQUERY_DATASET)
 
-    # Check if table exists
     try:
         bq_client.get_table(f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}")
     except Exception:
@@ -54,12 +73,10 @@ def run_analysis(table_name):
         for row in results:
             writer.writerow(list(row.values()))
 
-    # Upload to GCS
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(f"analysis_results/{table_name}_results.csv")
     blob.upload_from_filename(local_csv)
 
-    # Save to permanent BigQuery table
     destination_table = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}_analysis"
     job_config = bigquery.QueryJobConfig(
         destination=destination_table,
@@ -81,7 +98,6 @@ def index():
         file_path = f"/tmp/{uploaded_file.filename}"
         uploaded_file.save(file_path)
 
-        # Upload to GCS
         try:
             bucket = storage_client.bucket(BUCKET_NAME)
             blob = bucket.blob(uploaded_file.filename)
@@ -90,7 +106,6 @@ def index():
             flash(f"Failed to upload to GCS: {e}", "error")
             return redirect(url_for('index'))
 
-        # If SQL file, trigger import
         if uploaded_file.filename.endswith('.sql'):
             try:
                 message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
@@ -100,6 +115,14 @@ def index():
                 return redirect(url_for('index'))
 
         table_name = os.path.splitext(uploaded_file.filename)[0]
+
+        # NEW: Auto-create BigQuery table if CSV uploaded
+        if uploaded_file.filename.endswith('.csv'):
+            try:
+                create_table_from_csv_if_not_exists(table_name, file_path)
+            except Exception as e:
+                flash(f"Failed to create BigQuery table: {e}", "error")
+                return redirect(url_for('index'))
 
         try:
             run_analysis(table_name)
