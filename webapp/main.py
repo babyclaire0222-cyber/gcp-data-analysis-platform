@@ -20,6 +20,11 @@ bq_client = bigquery.Client()
 publisher = pubsub_v1.PublisherClient()
 topic_path = publisher.topic_path(PROJECT_ID, PUBSUB_TOPIC_FOR_SQL_IMPORT)
 
+# Cloud Function URL (replace with your deployed function endpoint)
+RUN_ANALYSIS_URL = os.environ.get(
+    "RUN_ANALYSIS_URL",
+    "https://REGION-PROJECT_ID.cloudfunctions.net/run_analysis"
+)
 
 def ensure_dataset_exists(dataset_id):
     """Create dataset if it doesn't already exist."""
@@ -86,55 +91,44 @@ def run_analysis(table_name):
 
     return table_name
 
-
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    message = ""
+    error = ""
+
     if request.method == 'POST':
         uploaded_file = request.files.get('file')
-        if not uploaded_file:
-            flash("No file uploaded.", "error")
-            return redirect(url_for('index'))
-
-        file_path = f"/tmp/{uploaded_file.filename}"
-        uploaded_file.save(file_path)
-
-        try:
-            bucket = storage_client.bucket(BUCKET_NAME)
-            blob = bucket.blob(uploaded_file.filename)
-            blob.upload_from_filename(file_path)
-        except Exception as e:
-            flash(f"Failed to upload to GCS: {e}", "error")
-            return redirect(url_for('index'))
-
-        if uploaded_file.filename.endswith('.sql'):
+        if uploaded_file:
             try:
-                message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
-                publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
+                file_path = f"/tmp/{uploaded_file.filename}"
+                uploaded_file.save(file_path)
+
+                # Upload to GCS
+                bucket = storage_client.bucket(BUCKET_NAME)
+                blob = bucket.blob(uploaded_file.filename)
+                blob.upload_from_filename(file_path)
+
+                # If SQL file, trigger import
+                if uploaded_file.filename.endswith('.sql'):
+                    message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
+                    publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
+
+                table_name = os.path.splitext(uploaded_file.filename)[0]
+
+                # Call Cloud Function to auto-create table + run analysis
+                try:
+                    resp = requests.get(f"{RUN_ANALYSIS_URL}?table={table_name}", timeout=60)
+                    if resp.status_code == 200:
+                        message = resp.text
+                    else:
+                        error = f"Analysis failed: {resp.text}"
+                except Exception as e:
+                    error = f"Error calling run_analysis: {str(e)}"
+
             except Exception as e:
-                flash(f"Failed to publish SQL import message: {e}", "error")
-                return redirect(url_for('index'))
+                error = f"File upload failed: {str(e)}"
 
-        table_name = os.path.splitext(uploaded_file.filename)[0]
-
-        # NEW: Auto-create BigQuery table if CSV uploaded
-        if uploaded_file.filename.endswith('.csv'):
-            try:
-                create_table_from_csv_if_not_exists(table_name, file_path)
-            except Exception as e:
-                flash(f"Failed to create BigQuery table: {e}", "error")
-                return redirect(url_for('index'))
-
-        try:
-            run_analysis(table_name)
-            flash(f"Uploaded {uploaded_file.filename} and analysis complete.", "success")
-        except ValueError as e:
-            flash(str(e), "error")
-        except Exception as e:
-            flash(f"Unexpected error: {e}", "error")
-
-        return redirect(url_for('index'))
-
-    return render_template('index.html')
+    return render_template('index.html', message=message, error=error)
 
 
 @app.route('/download/<filename>')
