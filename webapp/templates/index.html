@@ -74,8 +74,8 @@
         <div class="message success">
             {{ message }}
         </div>
-        {% if "Analysis completed" in message %}
-            <a class="download-link" href="/download/{{ message.split()[1] }}_analysis.csv">
+        {% if "Analysis complete" in message %}
+            <a class="download-link" href="/download/{{ message.split()[1] }}_results.csv">
                 Download Analysis Results
             </a>
         {% endif %}
