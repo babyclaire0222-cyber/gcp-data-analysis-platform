@@ -31,12 +31,22 @@
 
     <div class="section">
         <h2>Manual BigQuery Download</h2>
-        <form action="/download_bq" method="get">
+        <form action="/download_bq" method="get" id="downloadForm">
             <input type="text" name="table" placeholder="Enter table name" required>
             <button type="submit">Download Latest Analysis</button>
         </form>
     </div>
 
+    {% if table_name %}
+    <!-- Hidden link for auto-download -->
+    <a id="autoDownload" href="/download_bq?table={{ table_name }}" style="display:none;"></a>
+    <script>
+        // Auto-trigger the download after page load
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('autoDownload').click();
+        });
+    </script>
+    {% endif %}
 </body>
 </html>
 
