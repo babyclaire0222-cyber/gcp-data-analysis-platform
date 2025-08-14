@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, send_file
+from flask import Flask, request, render_template, send_file, url_for
 import os
 import json
 import csv
@@ -45,7 +45,7 @@ def run_analysis(table_name):
     query = f"SELECT * FROM `{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}` LIMIT 10"
     results = bq_client.query(query).result()
 
-    local_csv = f"/tmp/{table_name}_analysis.csv"
+    local_csv = f"/tmp/{table_name}_results.csv"
     with open(local_csv, "w", newline="", encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile)
         headers = [field.name for field in results.schema]
@@ -55,7 +55,7 @@ def run_analysis(table_name):
 
     # Upload to GCS
     bucket = storage_client.bucket(BUCKET_NAME)
-    blob = bucket.blob(f"analysis_results/{table_name}_analysis.csv")
+    blob = bucket.blob(f"analysis_results/{table_name}_results.csv")
     blob.upload_from_filename(local_csv)
 
     # Save to permanent BigQuery table
@@ -71,6 +71,10 @@ def run_analysis(table_name):
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    message = None
+    error = None
+    download_link = None
+
     if request.method == 'POST':
         uploaded_file = request.files.get('file')
         if uploaded_file:
@@ -91,17 +95,13 @@ def index():
 
             try:
                 run_analysis(table_name)
+                message = f"Uploaded {table_name} — Analysis complete."
+                # Auto-generate BigQuery download link
+                download_link = url_for('download_bq', table=table_name)
             except ValueError as e:
-                return render_template('index.html', error=str(e))
+                error = str(e)
 
-            # ✅ Pass table_name directly to template
-            return render_template(
-                'index.html',
-                message=f"Analysis completed for table '{table_name}'.",
-                table_name=table_name
-            )
-
-    return render_template('index.html')
+    return render_template('index.html', message=message, error=error, download_link=download_link)
 
 
 @app.route('/download/<filename>')
@@ -126,7 +126,7 @@ def download_bq():
     try:
         run_analysis(table_name)
     except ValueError as e:
-        return str(e), 400
+        return render_template('index.html', message=None, error=str(e)), 400
 
     query = f"SELECT * FROM `{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}_analysis`"
     results = bq_client.query(query).result()
@@ -144,6 +144,7 @@ def download_bq():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
 
 
 
