@@ -9,6 +9,11 @@ BUCKET_NAME = os.environ.get('BUCKET_NAME', 'data-analysis-upload-1000')
 bq_client = bigquery.Client()
 storage_client = storage.Client()
 
+def _dataset_location():
+    # Read actual dataset location (safer than assuming)
+    ds = bq_client.get_dataset(f"{PROJECT_ID}.{BIGQUERY_DATASET}")
+    return ds.location or BIGQUERY_LOCATION
+
 # Define a fixed schema for Looker Studio table (if needed)
 FIXED_SCHEMA = [
     bigquery.SchemaField("column1", "STRING"),
@@ -17,6 +22,37 @@ FIXED_SCHEMA = [
     bigquery.SchemaField("column4", "TIMESTAMP")
 ]
 
+
+def run_analysis(request: Request):
+    table_name = request.args.get('table')
+    if not table_name:
+        return "Missing 'table' query parameter. Example: ?table=my_table", 400
+
+    location = _dataset_location()
+
+    # Query source table
+    query = f"SELECT * FROM `{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}` LIMIT 10"
+    qcfg = bigquery.QueryJobConfig()
+    qjob = bq_client.query(query, job_config=qcfg, location=location)  # <<< set location
+    results = qjob.result()
+
+    # Write temp CSV to /tmp and upload to GCS (unchanged) …
+
+    # Load results into *_analysis table
+    destination_table = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}_analysis"
+    load_cfg = bigquery.LoadJobConfig(
+        # if you’re enforcing a schema, keep it here; otherwise use autodetect:
+        autodetect=True,
+        source_format=bigquery.SourceFormat.CSV,
+        skip_leading_rows=1,
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+    )
+    with open(result_file, "rb") as fh:
+        ljob = bq_client.load_table_from_file(fh, destination_table, job_config=load_cfg, location=location)  # <<< set location
+        ljob.result()
+
+    return f"Analysis complete for '{table_name}'. Loaded into {destination_table}."
+    
 def create_table_from_csv_if_not_exists(table_name):
     """Creates a BigQuery table from a CSV in GCS if it doesn't exist."""
     table_ref = bq_client.dataset(BIGQUERY_DATASET).table(table_name)
@@ -102,4 +138,3 @@ def run_analysis(request: Request):
         f"Results saved to GCS and BigQuery table '{table_name}_analysis'.\n"
         f"Connect Looker Studio to: {destination_table}"
     )
-
