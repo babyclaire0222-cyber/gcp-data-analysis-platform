@@ -3,6 +3,7 @@ import os
 import json
 import csv
 import pandas as pd
+from flask import jsonify
 from google.cloud import storage, bigquery
 from google.cloud import pubsub_v1
 
@@ -39,23 +40,28 @@ def load_to_bigquery(file_path, filename, table_name):
 
     ext = os.path.splitext(filename)[1].lower()
     tmp_path = file_path
+    skip_rows = 0
 
-    # Convert Excel to CSV before loading
     if ext in [".xls", ".xlsx"]:
+        # Convert Excel to CSV only once
         df = pd.read_excel(file_path)
         tmp_path = f"/tmp/{table_name}.csv"
         df.to_csv(tmp_path, index=False)
         source_format = bigquery.SourceFormat.CSV
         skip_rows = 1
+
     elif ext == ".csv":
         source_format = bigquery.SourceFormat.CSV
         skip_rows = 1
+
     elif ext == ".json":
         source_format = bigquery.SourceFormat.NEWLINE_DELIMITED_JSON
         skip_rows = 0
+
     elif ext == ".parquet":
         source_format = bigquery.SourceFormat.PARQUET
         skip_rows = 0
+
     else:
         raise ValueError("Unsupported file type. Use CSV, Excel, JSON, or Parquet.")
 
@@ -75,9 +81,7 @@ def load_to_bigquery(file_path, filename, table_name):
 
     with open(tmp_path, "rb") as source_file:
         load_job = bq_client.load_table_from_file(source_file, table_id, job_config=job_config)
-
     load_job.result()
-
 
 def run_analysis(table_name):
     """Runs a fresh analysis query, saves results to GCS and BigQuery."""
@@ -117,47 +121,41 @@ def run_analysis(table_name):
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    if request.method == 'POST':
+  if request.method == 'POST':
         uploaded_file = request.files.get('file')
-        if uploaded_file:
-            file_ext = os.path.splitext(uploaded_file.filename)[1].lower()
-            file_path = f"/tmp/{uploaded_file.filename}"
-            uploaded_file.save(file_path)
+        if not uploaded_file:
+            return jsonify({"success": False, "error": "No file uploaded"}), 400
 
-            table_name = os.path.splitext(uploaded_file.filename)[0].replace(" ", "_").lower()
+        file_ext = os.path.splitext(uploaded_file.filename)[1].lower()
+        table_name = os.path.splitext(uploaded_file.filename)[0].replace(" ", "_").lower()
 
-            try:
-                if file_ext == '.sql':
-                    # Handle SQL files with Pub/Sub
-                    message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
-                    publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
+        tmp_path = f"/tmp/{uploaded_file.filename}"
+        uploaded_file.save(tmp_path)
 
-                elif file_ext in ['.xlsx', '.xls']:
-                    # Convert Excel to CSV first
-                    import pandas as pd
-                    csv_path = f"/tmp/{table_name}.csv"
-                    df = pd.read_excel(file_path)
-                    df.to_csv(csv_path, index=False)
+        try:
+            if file_ext == '.sql':
+                # Handle SQL files via Pub/Sub
+                message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
+                publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
 
-                    load_to_bigquery(csv_path, f"{table_name}.csv", table_name)
+            elif file_ext in ['.csv', '.xls', '.xlsx']:
+                load_to_bigquery(tmp_path, uploaded_file.filename, table_name)
 
-                elif file_ext == '.csv':
-                    # Load CSV directly
-                    load_to_bigquery(file_path, uploaded_file.filename, table_name)
+            else:
+                return jsonify({"success": False, "error": "Unsupported file format"}), 400
 
-                else:
-                    flash("❌ Unsupported file format. Please upload CSV, Excel, or SQL.", "error")
-                    return redirect(url_for("index"))
+            run_analysis(table_name)
 
-                # Run downstream analysis
-                run_analysis(table_name)
+            return jsonify({
+                "success": True,
+                "message": f"Uploaded {uploaded_file.filename} and analysis complete",
+                "table": table_name
+            })
 
-                flash(f"✅ Uploaded {uploaded_file.filename} and analysis complete", "success")
-            except Exception as e:
-                flash(f"❌ Error: {str(e)}", "error")
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
 
-            return redirect(url_for("index"))
-
+    # GET request returns HTML
     return render_template('index.html')
 
 @app.route('/download/<filename>')
@@ -200,7 +198,6 @@ def download_bq():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
-
 
 
 
