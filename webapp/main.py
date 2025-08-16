@@ -117,8 +117,6 @@ def run_analysis(table_name):
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-@app.route('/', methods=['GET', 'POST'])
-def index():
     if request.method == 'POST':
         uploaded_file = request.files.get('file')
         if uploaded_file:
@@ -146,7 +144,7 @@ def index():
                     load_to_bigquery(file_path, uploaded_file.filename, table_name)
 
                 elif file_ext in ['.json', '.parquet']:
-                    # JSON and Parquet are supported in load_to_bigquery
+                    # Load JSON or Parquet directly
                     load_to_bigquery(file_path, uploaded_file.filename, table_name)
 
                 else:
