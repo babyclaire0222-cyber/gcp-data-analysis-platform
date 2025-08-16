@@ -8,3 +8,7 @@ google-cloud-bigquery==3.25.0
 # Optional but recommended for BigQuery CSV export/import
 pandas==2.2.2
 pyarrow==16.1.0
+
+pandas
+openpyxl
+
