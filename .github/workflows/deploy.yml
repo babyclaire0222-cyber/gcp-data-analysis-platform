@@ -53,10 +53,11 @@ jobs:
       - name: Deploy Cloud Function run_analysis
         run: |
           gcloud functions deploy ${{ env.FUNCTION_NAME }} \
-            --runtime python311 \
-            --trigger-http \
-            --allow-unauthenticated \
-            --region ${{ env.REGION }} \
-            --source "${{ env.FUNCTION_PATH }}" \
-            --entry-point run_analysis \
-            --set-env-vars "GCP_PROJECT=${{ env.PROJECT_ID }},BIGQUERY_DATASET=analysis_dataset,BUCKET_NAME=data-analysis-upload-1000"
+          --gen2 \
+          --runtime python311 \
+          --trigger-http \
+          --allow-unauthenticated \
+          --region ${{ env.REGION }} \
+          --source "${{ env.FUNCTION_PATH }}" \
+          --entry-point run_analysis \
+          --set-env-vars "GCP_PROJECT=${{ env.PROJECT_ID }},BIGQUERY_DATASET=analysis_dataset,BUCKET_NAME=data-analysis-upload-1000"
