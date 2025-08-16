@@ -1,11 +1,13 @@
-from flask import Flask, request, render_template, send_file
+from flask import Flask, request, render_template, send_file, redirect, url_for, flash
 import os
 import json
 import csv
+import pandas as pd
 from google.cloud import storage, bigquery
 from google.cloud import pubsub_v1
 
 app = Flask(__name__)
+app.secret_key = "supersecret"  # Needed for flash messages
 
 # GCP configuration
 PROJECT_ID = os.environ.get('GCP_PROJECT', 'data-analysis-webapp')
@@ -29,35 +31,58 @@ def ensure_dataset_exists(dataset_id):
         dataset = bigquery.Dataset(dataset_ref)
         dataset.location = "asia-southeast1"  # Match your region
         bq_client.create_dataset(dataset)
-        print(f"Dataset {dataset_id} created.")
 
 
-def load_csv_to_bigquery(bucket_name, source_blob_name, table_name):
-    """Loads a CSV file from GCS into BigQuery with autodetect schema."""
+def load_to_bigquery(file_path, filename, table_name):
+    """Loads supported file types into BigQuery with autodetect schema."""
     ensure_dataset_exists(BIGQUERY_DATASET)
 
-    dataset_ref = bq_client.dataset(BIGQUERY_DATASET)
-    table_ref = dataset_ref.table(table_name)
+    ext = os.path.splitext(filename)[1].lower()
+    tmp_path = file_path
 
+    # Convert Excel to CSV before loading
+    if ext in [".xls", ".xlsx"]:
+        df = pd.read_excel(file_path)
+        tmp_path = f"/tmp/{table_name}.csv"
+        df.to_csv(tmp_path, index=False)
+        source_format = bigquery.SourceFormat.CSV
+        skip_rows = 1
+    elif ext == ".csv":
+        source_format = bigquery.SourceFormat.CSV
+        skip_rows = 1
+    elif ext == ".json":
+        source_format = bigquery.SourceFormat.NEWLINE_DELIMITED_JSON
+        skip_rows = 0
+    elif ext == ".parquet":
+        source_format = bigquery.SourceFormat.PARQUET
+        skip_rows = 0
+    else:
+        raise ValueError("Unsupported file type. Use CSV, Excel, JSON, or Parquet.")
+
+    # Upload to GCS
+    bucket = storage_client.bucket(BUCKET_NAME)
+    blob = bucket.blob(f"uploads/{filename}")
+    blob.upload_from_filename(tmp_path)
+
+    # Load into BigQuery
+    table_id = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}"
     job_config = bigquery.LoadJobConfig(
         autodetect=True,
-        source_format=bigquery.SourceFormat.CSV,
-        skip_leading_rows=1,
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE
+        source_format=source_format,
+        skip_leading_rows=skip_rows,
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
     )
 
-    uri = f"gs://{bucket_name}/{source_blob_name}"
-    load_job = bq_client.load_table_from_uri(uri, table_ref, job_config=job_config, location="asia-southeast1")
-    load_job.result()
+    with open(tmp_path, "rb") as source_file:
+        load_job = bq_client.load_table_from_file(source_file, table_id, job_config=job_config)
 
-    print(f"Loaded {source_blob_name} into {BIGQUERY_DATASET}.{table_name}")
+    load_job.result()
 
 
 def run_analysis(table_name):
     """Runs a fresh analysis query, saves results to GCS and BigQuery."""
     ensure_dataset_exists(BIGQUERY_DATASET)
 
-    # Check if table exists
     try:
         bq_client.get_table(f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}")
     except Exception:
@@ -79,7 +104,7 @@ def run_analysis(table_name):
     blob = bucket.blob(f"analysis_results/{table_name}_results.csv")
     blob.upload_from_filename(local_csv)
 
-    # Save to permanent BigQuery table
+    # Save to BigQuery _analysis table
     destination_table = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}_analysis"
     job_config = bigquery.QueryJobConfig(
         destination=destination_table,
@@ -98,36 +123,22 @@ def index():
             file_path = f"/tmp/{uploaded_file.filename}"
             uploaded_file.save(file_path)
 
-            # Upload to GCS
-            bucket = storage_client.bucket(BUCKET_NAME)
-            blob = bucket.blob(uploaded_file.filename)
-            blob.upload_from_filename(file_path)
+            table_name = os.path.splitext(uploaded_file.filename)[0].replace(" ", "_").lower()
 
-            table_name = os.path.splitext(uploaded_file.filename)[0]
-
-            # If SQL file, trigger import
-            if uploaded_file.filename.endswith('.sql'):
-                message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
-                publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
-            elif uploaded_file.filename.endswith('.csv'):
-                # Auto load CSV to BigQuery
-                try:
-                    load_csv_to_bigquery(BUCKET_NAME, uploaded_file.filename, table_name)
-                except Exception as e:
-                    return f"Error loading CSV to BigQuery: {str(e)}", 500
-
-            # Run analysis
             try:
-                run_analysis(table_name)
-            except ValueError as e:
-                return str(e), 400
+                if uploaded_file.filename.endswith('.sql'):
+                    message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
+                    publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
+                else:
+                    load_to_bigquery(file_path, uploaded_file.filename, table_name)
 
-            return f"""
-                Uploaded {uploaded_file.filename}<br>
-                Table loaded to BigQuery and analysis complete.<br><br>
-                <a href='/download/{table_name}_results.csv'>Download GCS Analysis Results</a><br>
-                <a href='/download_bq?table={table_name}'>Download Latest Looker Studio Result (CSV)</a>
-            """
+                run_analysis(table_name)
+            except Exception as e:
+                flash(f"❌ Error: {str(e)}", "error")
+                return redirect(url_for("index"))
+
+            flash(f"✅ Uploaded {uploaded_file.filename} and analysis complete", "success")
+            return redirect(url_for("index"))
     return render_template('index.html')
 
 
