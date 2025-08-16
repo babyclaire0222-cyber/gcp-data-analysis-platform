@@ -120,27 +120,45 @@ def index():
     if request.method == 'POST':
         uploaded_file = request.files.get('file')
         if uploaded_file:
+            file_ext = os.path.splitext(uploaded_file.filename)[1].lower()
             file_path = f"/tmp/{uploaded_file.filename}"
             uploaded_file.save(file_path)
 
             table_name = os.path.splitext(uploaded_file.filename)[0].replace(" ", "_").lower()
 
             try:
-                if uploaded_file.filename.endswith('.sql'):
+                if file_ext == '.sql':
+                    # Handle SQL files with Pub/Sub
                     message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
                     publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
-                else:
+
+                elif file_ext in ['.xlsx', '.xls']:
+                    # Convert Excel to CSV first
+                    import pandas as pd
+                    csv_path = f"/tmp/{table_name}.csv"
+                    df = pd.read_excel(file_path)
+                    df.to_csv(csv_path, index=False)
+
+                    load_to_bigquery(csv_path, f"{table_name}.csv", table_name)
+
+                elif file_ext == '.csv':
+                    # Load CSV directly
                     load_to_bigquery(file_path, uploaded_file.filename, table_name)
 
+                else:
+                    flash("❌ Unsupported file format. Please upload CSV, Excel, or SQL.", "error")
+                    return redirect(url_for("index"))
+
+                # Run downstream analysis
                 run_analysis(table_name)
+
+                flash(f"✅ Uploaded {uploaded_file.filename} and analysis complete", "success")
             except Exception as e:
                 flash(f"❌ Error: {str(e)}", "error")
-                return redirect(url_for("index"))
 
-            flash(f"✅ Uploaded {uploaded_file.filename} and analysis complete", "success")
             return redirect(url_for("index"))
-    return render_template('index.html')
 
+    return render_template('index.html')
 
 @app.route('/download/<filename>')
 def download_file(filename):
