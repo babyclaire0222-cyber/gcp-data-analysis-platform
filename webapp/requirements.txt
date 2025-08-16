@@ -1,14 +1,18 @@
+# Web framework
 Flask==3.0.3
 gunicorn==21.2.0
 
+# Google Cloud libraries
 google-cloud-storage==2.16.0
 google-cloud-pubsub==2.21.5
 google-cloud-bigquery==3.25.0
 
-# Optional but recommended for BigQuery CSV export/import
+# Data handling (optional, only if needed for BigQuery CSV/Excel work)
 pandas==2.2.2
 pyarrow==16.1.0
+openpyxl>=3.1.2
 
-pandas
-openpyxl
-
+# Optional: lightweight dependencies for JSON/CSV handling
+# (only add if you need them to reduce container size)
+# python-dateutil>=2.8.2
+# six>=1.16.0
