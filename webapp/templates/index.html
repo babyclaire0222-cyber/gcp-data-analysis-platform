@@ -45,55 +45,52 @@
     </div>
 
     <script>
-        // Handle file upload
-        document.getElementById("uploadForm").onsubmit = async function(e) {
-            e.preventDefault();
-            const formData = new FormData(this);
-            const messageDiv = document.getElementById("message");
-            const downloadDiv = document.getElementById("download-link");
-            const downloadUrl = document.getElementById("download-url");
+    // Handle file upload
+    document.getElementById("uploadForm").onsubmit = async function(e) {
+        e.preventDefault();
+        const formData = new FormData(this);
+        const messageDiv = document.getElementById("message");
+        const downloadDiv = document.getElementById("download-link");
+        const downloadUrl = document.getElementById("download-url");
 
-            messageDiv.style.display = "none";
-            downloadDiv.style.display = "none";
+        messageDiv.style.display = "none";
+        downloadDiv.style.display = "none";
 
-            messageDiv.className = "message";
-            messageDiv.innerHTML = "⏳ Uploading file & processing in BigQuery...";
-            messageDiv.style.display = "block";
+        messageDiv.className = "message";
+        messageDiv.innerHTML = "⏳ Uploading file & processing in BigQuery...";
+        messageDiv.style.display = "block";
 
-            try {
-                const response = await fetch("/", { method: "POST", body: formData });
-                const text = await response.text();
+        try {
+            const response = await fetch("/", { method: "POST", body: formData });
+            const result = await response.json();   // ✅ Parse JSON
 
-                if (response.ok) {
-                    messageDiv.className = "message success";
-                    messageDiv.innerHTML = "✅ Analysis completed successfully!";
+            if (result.success) {
+                messageDiv.className = "message success";
+                messageDiv.innerHTML = "✅ " + result.message;
 
-                    // Extract table name from response
-                    const match = text.match(/table=([^"']+)/);
-                    if (match && match[1]) {
-                        downloadUrl.href = `/download_bq?table=${match[1]}`;
-                        downloadDiv.style.display = "block";
-                    }
-                } else {
-                    messageDiv.className = "message error";
-                    messageDiv.innerHTML = "❌ " + text;
+                if (result.table) {
+                    downloadUrl.href = `/download_bq?table=${encodeURIComponent(result.table)}`;
+                    downloadDiv.style.display = "block";
                 }
-            } catch (err) {
+            } else {
                 messageDiv.className = "message error";
-                messageDiv.innerHTML = "❌ Upload failed: " + err.message;
+                messageDiv.innerHTML = "❌ " + (result.error || "Unknown error");
             }
-        };
+        } catch (err) {
+            messageDiv.className = "message error";
+            messageDiv.innerHTML = "❌ Upload failed: " + err.message;
+        }
+    };
 
-        // Handle manual download form
-        document.getElementById("downloadForm").onsubmit = function(e) {
-            e.preventDefault();
-            const table = this.table.value.trim();
-            if (table) {
-                window.location.href = `/download_bq?table=${encodeURIComponent(table)}`;
-            }
-        };
+    // Handle manual download form
+    document.getElementById("downloadForm").onsubmit = function(e) {
+        e.preventDefault();
+        const table = this.table.value.trim();
+        if (table) {
+            window.location.href = `/download_bq?table=${encodeURIComponent(table)}`;
+        }
+    };
     </script>
 </body>
 </html>
-
 
