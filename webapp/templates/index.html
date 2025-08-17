@@ -2,6 +2,9 @@
 <html>
 <head>
     <title>Data Analysis Platform</title>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js"></script>
+
     <style>
         body { font-family: Arial, sans-serif; margin: 40px; }
         .container { max-width: 600px; margin: auto; }
@@ -14,24 +17,34 @@
         .success { background-color: #d4edda; color: #155724; }
         .error { background-color: #f8d7da; color: #721c24; }
         #download-link { display: none; margin-top: 15px; }
+        #auth-section { margin-bottom: 20px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Upload File for Analysis</h1>
+        <h1>Data Analysis Platform</h1>
 
-        <!-- File Upload Form -->
-        <form id="uploadForm" method="POST" enctype="multipart/form-data">
-            <input type="file" name="file" required>
-            <button type="submit">Upload & Analyze</button>
-        </form>
+        <!-- Firebase Auth Section -->
+        <div id="auth-section">
+            <button id="login-btn">Login with Google</button>
+            <button id="logout-btn" style="display:none;">Logout</button>
+            <p id="user-info" style="font-weight:bold;"></p>
+        </div>
 
-        <!-- Messages -->
-        <div id="message" class="message" style="display:none;"></div>
+        <!-- File Upload Form (hidden until login) -->
+        <div id="upload-section" style="display:none;">
+            <form id="uploadForm" method="POST" enctype="multipart/form-data">
+                <input type="file" name="file" required>
+                <button type="submit">Upload & Analyze</button>
+            </form>
 
-        <!-- Automatic Download Link -->
-        <div id="download-link">
-            <a id="download-url" href="#" download>⬇ Download Analysis Results (CSV)</a>
+            <!-- Messages -->
+            <div id="message" class="message" style="display:none;"></div>
+
+            <!-- Automatic Download Link -->
+            <div id="download-link">
+                <a id="download-url" href="#" download>⬇ Download Analysis Results (CSV)</a>
+            </div>
         </div>
 
         <hr>
@@ -45,7 +58,53 @@
     </div>
 
     <script>
-    // Handle file upload
+    // 🔹 Firebase Config
+    const firebaseConfig = {
+      apiKey: "AIzaSyBhSeQrn4vDzr8910pEziwvlYOra1WC7jQ",
+      authDomain: "data-analysis-webapp.firebaseapp.com",
+      projectId: "data-analysis-webapp",
+      storageBucket: "data-analysis-webapp.appspot.com",
+      messagingSenderId: "835249000571",
+      appId: "1:835249000571:web:81e2cb70e84e53194812de",
+      measurementId: "G-JV8TWVXNDV"
+    };
+
+    // 🔹 Init Firebase
+    const app = firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+
+    const loginBtn = document.getElementById("login-btn");
+    const logoutBtn = document.getElementById("logout-btn");
+    const userInfo = document.getElementById("user-info");
+    const uploadSection = document.getElementById("upload-section");
+
+    // Google Login
+    loginBtn.onclick = () => {
+        const provider = new firebase.auth.GoogleAuthProvider();
+        auth.signInWithPopup(provider);
+    };
+
+    // Logout
+    logoutBtn.onclick = () => {
+        auth.signOut();
+    };
+
+    // Auth state change
+    auth.onAuthStateChanged(user => {
+        if (user) {
+            userInfo.textContent = `Logged in as: ${user.email}`;
+            loginBtn.style.display = "none";
+            logoutBtn.style.display = "inline-block";
+            uploadSection.style.display = "block";
+        } else {
+            userInfo.textContent = "";
+            loginBtn.style.display = "inline-block";
+            logoutBtn.style.display = "none";
+            uploadSection.style.display = "none";
+        }
+    });
+
+    // 🔹 Handle file upload
     document.getElementById("uploadForm").onsubmit = async function(e) {
         e.preventDefault();
         const formData = new FormData(this);
@@ -62,7 +121,7 @@
 
         try {
             const response = await fetch("/", { method: "POST", body: formData });
-            const result = await response.json();   // ✅ Parse JSON
+            const result = await response.json();
 
             if (result.success) {
                 messageDiv.className = "message success";
@@ -82,7 +141,7 @@
         }
     };
 
-    // Handle manual download form
+    // 🔹 Handle manual download form
     document.getElementById("downloadForm").onsubmit = function(e) {
         e.preventDefault();
         const table = this.table.value.trim();
