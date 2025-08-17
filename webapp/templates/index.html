@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!DOCTYPE html> 
 <html>
 <head>
     <title>Data Analysis Platform</title>
@@ -73,6 +73,8 @@
     const app = firebase.initializeApp(firebaseConfig);
     const auth = firebase.auth();
 
+    let idToken = null;  // store token globally
+
     const loginBtn = document.getElementById("login-btn");
     const logoutBtn = document.getElementById("logout-btn");
     const userInfo = document.getElementById("user-info");
@@ -87,26 +89,37 @@
     // Logout
     logoutBtn.onclick = () => {
         auth.signOut();
+        idToken = null;
     };
 
     // Auth state change
-    auth.onAuthStateChanged(user => {
+    auth.onAuthStateChanged(async (user) => {
         if (user) {
             userInfo.textContent = `Logged in as: ${user.email}`;
             loginBtn.style.display = "none";
             logoutBtn.style.display = "inline-block";
             uploadSection.style.display = "block";
+
+            // 🔹 Get Firebase ID Token
+            idToken = await user.getIdToken();
+            console.log("Got ID Token:", idToken);
         } else {
             userInfo.textContent = "";
             loginBtn.style.display = "inline-block";
             logoutBtn.style.display = "none";
             uploadSection.style.display = "none";
+            idToken = null;
         }
     });
 
-    // 🔹 Handle file upload
+    // 🔹 Handle file upload (with token)
     document.getElementById("uploadForm").onsubmit = async function(e) {
         e.preventDefault();
+        if (!idToken) {
+            alert("Please login first.");
+            return;
+        }
+
         const formData = new FormData(this);
         const messageDiv = document.getElementById("message");
         const downloadDiv = document.getElementById("download-link");
@@ -120,7 +133,12 @@
         messageDiv.style.display = "block";
 
         try {
-            const response = await fetch("/", { method: "POST", body: formData });
+            const response = await fetch("/", { 
+                method: "POST", 
+                body: formData,
+                headers: { "Authorization": "Bearer " + idToken }  // ✅ Attach token
+            });
+
             const result = await response.json();
 
             if (result.success) {
@@ -141,12 +159,16 @@
         }
     };
 
-    // 🔹 Handle manual download form
-    document.getElementById("downloadForm").onsubmit = function(e) {
+    // 🔹 Handle manual download (with token)
+    document.getElementById("downloadForm").onsubmit = async function(e) {
         e.preventDefault();
+        if (!idToken) {
+            alert("Please login first.");
+            return;
+        }
         const table = this.table.value.trim();
         if (table) {
-            window.location.href = `/download_bq?table=${encodeURIComponent(table)}`;
+            window.location.href = `/download_bq?table=${encodeURIComponent(table)}&token=${idToken}`;
         }
     };
     </script>
