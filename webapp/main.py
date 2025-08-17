@@ -233,6 +233,20 @@ def download_bq():
 
     return send_file(temp_path, mimetype='text/csv', as_attachment=True, download_name=f"{table_name}_analysis.csv")
 
+@app.route("/whoami")
+def whoami():
+    """Return basic info about the logged-in Firebase user."""
+    user = verify_firebase_token(request)
+    if not user:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    return jsonify({
+        "success": True,
+        "uid": user.get("uid"),
+        "email": user.get("email"),
+        "name": user.get("name")
+    })
+
 # ===============================
 # 🔹 Start Flask App
 # ===============================
