@@ -1,64 +1,92 @@
-<!DOCTYPE html> 
+<!DOCTYPE html>
 <html>
 <head>
-    <title>Data Analysis Platform</title>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js"></script>
+  <meta charset="utf-8" />
+  <title>Data Analysis Platform</title>
 
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; }
-        .container { max-width: 600px; margin: auto; }
-        h1 { color: #333; }
-        form { margin-bottom: 20px; }
-        input[type="file"], input[type="text"] { padding: 8px; margin-bottom: 10px; width: 100%; }
-        button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; cursor: pointer; }
-        button:hover { background-color: #45a049; }
-        .message { margin-top: 20px; padding: 10px; border-radius: 4px; }
-        .success { background-color: #d4edda; color: #155724; }
-        .error { background-color: #f8d7da; color: #721c24; }
-        #download-link { display: none; margin-top: 15px; }
-        #auth-section { margin-bottom: 20px; }
-    </style>
+  <!-- Firebase (compat builds for simple global 'firebase.*' usage) -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; }
+    .container { max-width: 720px; margin: auto; }
+    h1 { color: #333; }
+    form { margin-bottom: 20px; }
+    input[type="file"], input[type="text"], input[type="email"], input[type="password"] {
+      padding: 8px; margin-bottom: 10px; width: 100%;
+      box-sizing: border-box;
+    }
+    button {
+      padding: 10px 16px; background-color: #4CAF50; color: white;
+      border: none; cursor: pointer; border-radius: 4px; margin-right: 6px;
+    }
+    button.secondary { background-color: #1976d2; }
+    button.warn { background-color: #9e9e9e; }
+    button:hover { opacity: 0.95; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; }
+    .card { border: 1px solid #eee; border-radius: 8px; padding: 16px; margin: 16px 0; }
+    .message { margin-top: 12px; padding: 10px; border-radius: 4px; }
+    .success { background-color: #d4edda; color: #155724; }
+    .error   { background-color: #f8d7da; color: #721c24; }
+    .info    { background-color: #e8f4fd; color: #084b8a; }
+    #download-link { display: none; margin-top: 12px; }
+    #user-info { font-weight: bold; }
+    .muted { color:#666; font-size: 0.9em; }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Data Analysis Platform</h1>
+  <div class="container">
+    <h1>Data Analysis Platform</h1>
 
-        <!-- Firebase Auth Section -->
-        <div id="auth-section">
-            <button id="login-btn">Login with Google</button>
-            <button id="logout-btn" style="display:none;">Logout</button>
-            <p id="user-info" style="font-weight:bold;"></p>
-        </div>
+    <!-- Auth Section -->
+    <div class="card" id="auth-section">
+      <h2>Login / Register</h2>
 
-        <!-- File Upload Form (hidden until login) -->
-        <div id="upload-section" style="display:none;">
-            <form id="uploadForm" method="POST" enctype="multipart/form-data">
-                <input type="file" name="file" required>
-                <button type="submit">Upload & Analyze</button>
-            </form>
-
-            <!-- Messages -->
-            <div id="message" class="message" style="display:none;"></div>
-
-            <!-- Automatic Download Link -->
-            <div id="download-link">
-                <a id="download-url" href="#" download>⬇ Download Analysis Results (CSV)</a>
-            </div>
-        </div>
-
-        <hr>
-
-        <!-- Manual BigQuery Download -->
-        <h2>Manual BigQuery Download</h2>
-        <form id="downloadForm">
-            <input type="text" name="table" placeholder="Enter table name" required>
-            <button type="submit">Download Latest Analysis</button>
-        </form>
+      <div class="row">
+        <input type="email" id="email" placeholder="Email" />
+        <input type="password" id="password" placeholder="Password" />
+      </div>
+      <div class="row">
+        <button id="register-btn" class="secondary">Register (Email)</button>
+        <button id="login-email-btn" class="secondary">Login (Email)</button>
+        <button id="login-google-btn">Login with Google</button>
+        <button id="logout-btn" class="warn" style="display:none;">Logout</button>
+      </div>
+      <div id="auth-msg" class="message info" style="display:none;"></div>
+      <p id="user-info"></p>
     </div>
 
-    <script>
-    // 🔹 Firebase Config
+    <!-- Upload Section (shown after login) -->
+    <div class="card" id="upload-section" style="display:none;">
+      <h2>Upload File for Analysis</h2>
+      <form id="uploadForm" method="POST" enctype="multipart/form-data">
+        <input type="file" name="file" required />
+        <button type="submit">Upload & Analyze</button>
+      </form>
+
+      <div id="message" class="message" style="display:none;"></div>
+
+      <!-- Auto download link (used if backend returns table name) -->
+      <div id="download-link">
+        <a id="download-url" href="#" download>⬇ Download Analysis Results (CSV)</a>
+      </div>
+      <p class="muted">Supported: CSV, XLSX/XLS, JSON (NDJSON), Parquet, and .sql (via Pub/Sub).</p>
+    </div>
+
+    <!-- Manual Download -->
+    <div class="card">
+      <h2>Manual BigQuery Download</h2>
+      <form id="downloadForm">
+        <input type="text" name="table" placeholder="Enter table name (without _analysis)" required />
+        <button type="submit">Download Latest Analysis</button>
+      </form>
+      <div id="manual-msg" class="message" style="display:none;"></div>
+    </div>
+  </div>
+
+  <script>
+    // ---------- Firebase setup ----------
     const firebaseConfig = {
       apiKey: "AIzaSyBhSeQrn4vDzr8910pEziwvlYOra1WC7jQ",
       authDomain: "data-analysis-webapp.firebaseapp.com",
@@ -68,110 +96,192 @@
       appId: "1:835249000571:web:81e2cb70e84e53194812de",
       measurementId: "G-JV8TWVXNDV"
     };
-
-    // 🔹 Init Firebase
-    const app = firebase.initializeApp(firebaseConfig);
+    firebase.initializeApp(firebaseConfig);
     const auth = firebase.auth();
 
-    let idToken = null;  // store token globally
+    // UI elements
+    const loginGoogleBtn = document.getElementById("login-google-btn");
+    const loginEmailBtn  = document.getElementById("login-email-btn");
+    const registerBtn    = document.getElementById("register-btn");
+    const logoutBtn      = document.getElementById("logout-btn");
+    const userInfo       = document.getElementById("user-info");
+    const uploadSection  = document.getElementById("upload-section");
+    const authMsg        = document.getElementById("auth-msg");
 
-    const loginBtn = document.getElementById("login-btn");
-    const logoutBtn = document.getElementById("logout-btn");
-    const userInfo = document.getElementById("user-info");
-    const uploadSection = document.getElementById("upload-section");
+    const emailEl = document.getElementById("email");
+    const passwordEl = document.getElementById("password");
 
-    // Google Login
-    loginBtn.onclick = () => {
+    let idToken = null;
+
+    function showAuthMsg(text, type="info") {
+      authMsg.textContent = text;
+      authMsg.className = "message " + type;
+      authMsg.style.display = "block";
+    }
+
+    function clearAuthMsg() {
+      authMsg.style.display = "none";
+      authMsg.textContent = "";
+    }
+
+    // Register with email/password
+    registerBtn.onclick = async () => {
+      clearAuthMsg();
+      try {
+        await auth.createUserWithEmailAndPassword(emailEl.value, passwordEl.value);
+        showAuthMsg("✅ Registration successful, you are now signed in.", "success");
+      } catch (e) {
+        showAuthMsg("❌ " + e.message, "error");
+      }
+    };
+
+    // Login with email/password
+    loginEmailBtn.onclick = async () => {
+      clearAuthMsg();
+      try {
+        await auth.signInWithEmailAndPassword(emailEl.value, passwordEl.value);
+      } catch (e) {
+        showAuthMsg("❌ " + e.message, "error");
+      }
+    };
+
+    // Google login
+    loginGoogleBtn.onclick = async () => {
+      clearAuthMsg();
+      try {
         const provider = new firebase.auth.GoogleAuthProvider();
-        auth.signInWithPopup(provider);
+        await auth.signInWithPopup(provider);
+      } catch (e) {
+        showAuthMsg("❌ " + e.message, "error");
+      }
     };
 
     // Logout
-    logoutBtn.onclick = () => {
-        auth.signOut();
-        idToken = null;
-    };
+    logoutBtn.onclick = () => auth.signOut();
 
-    // Auth state change
+    // Auth state listener
     auth.onAuthStateChanged(async (user) => {
-        if (user) {
-            userInfo.textContent = `Logged in as: ${user.email}`;
-            loginBtn.style.display = "none";
-            logoutBtn.style.display = "inline-block";
-            uploadSection.style.display = "block";
-
-            // 🔹 Get Firebase ID Token
-            idToken = await user.getIdToken();
-            console.log("Got ID Token:", idToken);
-        } else {
-            userInfo.textContent = "";
-            loginBtn.style.display = "inline-block";
-            logoutBtn.style.display = "none";
-            uploadSection.style.display = "none";
-            idToken = null;
+      if (user) {
+        userInfo.textContent = `Logged in as: ${user.email}`;
+        logoutBtn.style.display = "inline-block";
+        uploadSection.style.display = "block";
+        try {
+          idToken = await user.getIdToken(/* forceRefresh */ true);
+        } catch {
+          idToken = null;
+          showAuthMsg("⚠ Could not get ID token; requests may fail.", "error");
         }
+      } else {
+        userInfo.textContent = "";
+        logoutBtn.style.display = "none";
+        uploadSection.style.display = "none";
+        idToken = null;
+      }
     });
 
-    // 🔹 Handle file upload (with token)
+    // ---------- Helpers to call backend with auth ----------
+    async function authFetch(url, options={}) {
+      options.headers = options.headers || {};
+      if (idToken) {
+        options.headers["Authorization"] = "Bearer " + idToken;
+      }
+      return fetch(url, options);
+    }
+
+    // ---------- Upload & analyze ----------
     document.getElementById("uploadForm").onsubmit = async function(e) {
-        e.preventDefault();
-        if (!idToken) {
-            alert("Please login first.");
-            return;
+      e.preventDefault();
+      const formData = new FormData(this);
+      const messageDiv = document.getElementById("message");
+      const downloadDiv = document.getElementById("download-link");
+      const downloadUrl = document.getElementById("download-url");
+
+      messageDiv.style.display = "none";
+      downloadDiv.style.display = "none";
+      messageDiv.className = "message info";
+      messageDiv.textContent = "⏳ Uploading & processing in BigQuery...";
+      messageDiv.style.display = "block";
+
+      try {
+        const resp = await authFetch("/", { method: "POST", body: formData });
+
+        // Try JSON first; if not JSON, fallback to text
+        let data = null, text = null;
+        const ct = resp.headers.get("content-type") || "";
+        if (ct.includes("application/json")) {
+          data = await resp.json();
+        } else {
+          text = await resp.text();
         }
 
-        const formData = new FormData(this);
-        const messageDiv = document.getElementById("message");
-        const downloadDiv = document.getElementById("download-link");
-        const downloadUrl = document.getElementById("download-url");
+        if (resp.ok) {
+          messageDiv.className = "message success";
+          messageDiv.textContent = (data?.message) || "✅ Analysis completed successfully!";
 
-        messageDiv.style.display = "none";
-        downloadDiv.style.display = "none";
+          // If backend provided a table, show auto download link
+          const tableName =
+            data?.table ||
+            (/table=([^"'>\s]+)/.exec(text || "") || [null, null])[1];
 
-        messageDiv.className = "message";
-        messageDiv.innerHTML = "⏳ Uploading file & processing in BigQuery...";
-        messageDiv.style.display = "block";
-
-        try {
-            const response = await fetch("/", { 
-                method: "POST", 
-                body: formData,
-                headers: { "Authorization": "Bearer " + idToken }  // ✅ Attach token
-            });
-
-            const result = await response.json();
-
-            if (result.success) {
-                messageDiv.className = "message success";
-                messageDiv.innerHTML = "✅ " + result.message;
-
-                if (result.table) {
-                    downloadUrl.href = `/download_bq?table=${encodeURIComponent(result.table)}`;
-                    downloadDiv.style.display = "block";
-                }
-            } else {
-                messageDiv.className = "message error";
-                messageDiv.innerHTML = "❌ " + (result.error || "Unknown error");
-            }
-        } catch (err) {
-            messageDiv.className = "message error";
-            messageDiv.innerHTML = "❌ Upload failed: " + err.message;
+          if (tableName) {
+            // Use an authenticated download (so headers are included)
+            downloadUrl.onclick = async (e) => {
+              e.preventDefault();
+              await downloadAnalysisCsv(tableName);
+            };
+            downloadUrl.href = "#";
+            downloadUrl.textContent = "⬇ Download Analysis Results (CSV)";
+            downloadDiv.style.display = "block";
+          }
+        } else {
+          const msg = data?.error || text || "Request failed.";
+          messageDiv.className = "message error";
+          messageDiv.textContent = "❌ " + msg;
         }
+      } catch (err) {
+        messageDiv.className = "message error";
+        messageDiv.textContent = "❌ Upload failed: " + err.message;
+      }
     };
 
-    // 🔹 Handle manual download (with token)
+    // ---------- Manual download with auth header (Blob → save) ----------
     document.getElementById("downloadForm").onsubmit = async function(e) {
-        e.preventDefault();
-        if (!idToken) {
-            alert("Please login first.");
-            return;
-        }
-        const table = this.table.value.trim();
-        if (table) {
-            window.location.href = `/download_bq?table=${encodeURIComponent(table)}&token=${idToken}`;
-        }
+      e.preventDefault();
+      const table = this.table.value.trim();
+      const manualMsg = document.getElementById("manual-msg");
+      manualMsg.style.display = "none";
+
+      if (!table) return;
+      try {
+        await downloadAnalysisCsv(table);
+        manualMsg.className = "message success";
+        manualMsg.textContent = "✅ Download started.";
+        manualMsg.style.display = "block";
+      } catch (err) {
+        manualMsg.className = "message error";
+        manualMsg.textContent = "❌ " + err.message;
+        manualMsg.style.display = "block";
+      }
     };
-    </script>
+
+    async function downloadAnalysisCsv(table) {
+      const url = `/download_bq?table=${encodeURIComponent(table)}`;
+      const resp = await authFetch(url, { method: "GET" });
+      if (!resp.ok) {
+        const ct = resp.headers.get("content-type") || "";
+        const errText = ct.includes("application/json") ? (await resp.json()).error : await resp.text();
+        throw new Error(errText || "Download failed.");
+      }
+      const blob = await resp.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${table}_analysis.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+    }
+  </script>
 </body>
 </html>
 
