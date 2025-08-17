@@ -16,6 +16,3 @@ protobuf>=4.25.0
 pandas==2.2.2
 pyarrow==16.1.0
 openpyxl>=3.1.2
-
-#Initialize Firebase Admin
-firebase-admin==6.5.0
