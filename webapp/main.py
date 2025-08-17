@@ -15,21 +15,50 @@ app.secret_key = "supersecret"  # Needed for flash messages
 # 🔹 Firebase Authentication Init
 # ===============================
 if not firebase_admin._apps:
-    cred = credentials.ApplicationDefault()  # Uses Cloud Run / GCP Service Account
+    cred = credentials.ApplicationDefault()  # Cloud Run / GCP SA
     firebase_admin.initialize_app(cred)
 
-def verify_firebase_token(request):
-    """Verify Firebase ID token from Authorization header."""
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
+def _extract_id_token():
+    """Get Firebase ID token from header or query string."""
+    # 1) Header: Authorization: Bearer <token>
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header.split("Bearer ", 1)[1].strip()
+
+    # 2) Query string: ?auth=<token> or ?token=<token>
+    token = request.args.get("auth") or request.args.get("token")
+    if token:
+        return token.strip()
+
+    # 3) (Optional) Form field fallback for multipart
+    token = request.form.get("auth") or request.form.get("token")
+    if token:
+        return token.strip()
+
+    return None
+
+def verify_firebase_token():
+    """Verify Firebase ID token from header or query param."""
+    raw_token = _extract_id_token()
+    if not raw_token:
         return None
     try:
-        token = auth_header.split("Bearer ")[1]
-        decoded_token = auth.verify_id_token(token)
-        return decoded_token  # includes uid, email, etc.
+        decoded = auth.verify_id_token(raw_token)
+        return decoded  # includes uid, email, etc.
     except Exception as e:
         print(f"Auth error: {e}")
         return None
+
+from functools import wraps
+def login_required(f):
+    """Decorator to protect routes with Firebase auth (header or query)."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        user = verify_firebase_token()
+        if not user:
+            return jsonify({"success": False, "error": "Unauthorized. Please log in."}), 401
+        return f(user, *args, **kwargs)
+    return wrapper
 
 # ===============================
 # 🔹 GCP Configuration
