@@ -1,15 +1,39 @@
-from flask import Flask, request, render_template, send_file, redirect, url_for, flash
+from flask import Flask, request, render_template, send_file, redirect, url_for, flash, jsonify
 import os
 import json
 import csv
 import pandas as pd
 from google.cloud import storage, bigquery
 from google.cloud import pubsub_v1
+import firebase_admin
+from firebase_admin import auth, credentials
 
 app = Flask(__name__)
 app.secret_key = "supersecret"  # Needed for flash messages
 
-# GCP configuration
+# ===============================
+# 🔹 Firebase Authentication Init
+# ===============================
+if not firebase_admin._apps:
+    cred = credentials.ApplicationDefault()  # Uses Cloud Run / GCP Service Account
+    firebase_admin.initialize_app(cred)
+
+def verify_firebase_token(request):
+    """Verify Firebase ID token from Authorization header."""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return None
+    try:
+        token = auth_header.split("Bearer ")[1]
+        decoded_token = auth.verify_id_token(token)
+        return decoded_token  # includes uid, email, etc.
+    except Exception as e:
+        print(f"Auth error: {e}")
+        return None
+
+# ===============================
+# 🔹 GCP Configuration
+# ===============================
 PROJECT_ID = os.environ.get('GCP_PROJECT', 'data-analysis-webapp')
 BUCKET_NAME = os.environ.get('BUCKET_NAME', 'data-analysis-upload-1000')
 PUBSUB_TOPIC_FOR_SQL_IMPORT = os.environ.get('PUBSUB_TOPIC_FOR_SQL_IMPORT', 'sql-import-topic')
@@ -21,7 +45,9 @@ bq_client = bigquery.Client()
 publisher = pubsub_v1.PublisherClient()
 topic_path = publisher.topic_path(PROJECT_ID, PUBSUB_TOPIC_FOR_SQL_IMPORT)
 
-
+# ===============================
+# 🔹 Helper functions
+# ===============================
 def ensure_dataset_exists(dataset_id):
     """Create dataset if it doesn't already exist."""
     dataset_ref = bq_client.dataset(dataset_id)
@@ -31,7 +57,6 @@ def ensure_dataset_exists(dataset_id):
         dataset = bigquery.Dataset(dataset_ref)
         dataset.location = "asia-southeast1"  # Match your region
         bq_client.create_dataset(dataset)
-
 
 def load_to_bigquery(file_path, filename, table_name):
     """Loads supported file types into BigQuery with autodetect schema."""
@@ -78,7 +103,6 @@ def load_to_bigquery(file_path, filename, table_name):
 
     load_job.result()
 
-
 def run_analysis(table_name):
     """Runs a fresh analysis query, saves results to GCS and BigQuery."""
     ensure_dataset_exists(BIGQUERY_DATASET)
@@ -114,9 +138,15 @@ def run_analysis(table_name):
 
     return table_name
 
-
+# ===============================
+# 🔹 Routes
+# ===============================
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    user = verify_firebase_token(request)
+    if not user:
+        return jsonify({"success": False, "error": "Unauthorized. Please log in."}), 401
+
     if request.method == 'POST':
         uploaded_file = request.files.get('file')
         if uploaded_file:
@@ -139,33 +169,32 @@ def index():
                     df.to_csv(csv_path, index=False)
                     load_to_bigquery(csv_path, f"{table_name}.csv", table_name)
 
-                elif file_ext == '.csv':
-                    # Load CSV directly
-                    load_to_bigquery(file_path, uploaded_file.filename, table_name)
-
-                elif file_ext in ['.json', '.parquet']:
-                    # Load JSON or Parquet directly
+                elif file_ext in ['.csv', '.json', '.parquet']:
                     load_to_bigquery(file_path, uploaded_file.filename, table_name)
 
                 else:
-                    flash("❌ Unsupported file format. Please upload CSV, Excel, JSON, Parquet, or SQL.", "error")
-                    return redirect(url_for("index"))
+                    return jsonify({"success": False, "error": "Unsupported file format."}), 400
 
                 # Run downstream analysis
                 run_analysis(table_name)
-                flash(f"✅ Uploaded {uploaded_file.filename} and analysis complete", "success")
+                return jsonify({
+                    "success": True,
+                    "message": f"✅ Uploaded {uploaded_file.filename} and analysis complete",
+                    "table": table_name,
+                    "user": user.get("email")
+                })
 
             except Exception as e:
-                flash(f"❌ Error: {str(e)}", "error")
-                return redirect(url_for("index"))
-
-            return redirect(url_for("index"))
+                return jsonify({"success": False, "error": str(e)}), 500
 
     return render_template('index.html')
 
-
 @app.route('/download/<filename>')
 def download_file(filename):
+    user = verify_firebase_token(request)
+    if not user:
+        return "Unauthorized", 401
+
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(f"analysis_results/{filename}")
 
@@ -176,9 +205,12 @@ def download_file(filename):
     blob.download_to_filename(temp_path)
     return send_file(temp_path, mimetype='text/csv', as_attachment=True, download_name=filename)
 
-
 @app.route('/download_bq')
 def download_bq():
+    user = verify_firebase_token(request)
+    if not user:
+        return "Unauthorized", 401
+
     table_name = request.args.get("table")
     if not table_name:
         return "Missing ?table parameter.", 400
@@ -201,7 +233,9 @@ def download_bq():
 
     return send_file(temp_path, mimetype='text/csv', as_attachment=True, download_name=f"{table_name}_analysis.csv")
 
-
+# ===============================
+# 🔹 Start Flask App
+# ===============================
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
