@@ -1,64 +1,40 @@
-from flask import Flask, request, render_template, send_file, redirect, url_for, flash, jsonify
+from flask import Flask, request, render_template, send_file, jsonify, g
 import os
 import json
 import csv
 import pandas as pd
+from functools import wraps
 from google.cloud import storage, bigquery
 from google.cloud import pubsub_v1
-import firebase_admin
-from firebase_admin import auth, credentials
 
 app = Flask(__name__)
 app.secret_key = "supersecret"  # Needed for flash messages
 
 # ===============================
-# 🔹 Firebase Authentication Init
+# 🔹 IAP-only auth helpers
 # ===============================
-if not firebase_admin._apps:
-    cred = credentials.ApplicationDefault()  # Cloud Run / GCP SA
-    firebase_admin.initialize_app(cred)
+@app.before_request
+def read_iap_identity():
+    """
+    When traffic comes through IAP, Google injects:
+      X-Goog-Authenticated-User-Email: "accounts.google.com:<email>"
+    """
+    raw = request.headers.get("X-Goog-Authenticated-User-Email", "") or ""
+    g.user_email = raw.split(":", 1)[1] if raw.startswith("accounts.google.com:") else None
 
-def _extract_id_token():
-    """Get Firebase ID token from header or query string."""
-    # 1) Header: Authorization: Bearer <token>
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        return auth_header.split("Bearer ", 1)[1].strip()
+def current_user_email():
+    """Return the IAP-authenticated email, or None."""
+    return getattr(g, "user_email", None)
 
-    # 2) Query string: ?auth=<token> or ?token=<token>
-    token = request.args.get("auth") or request.args.get("token")
-    if token:
-        return token.strip()
-
-    # 3) (Optional) Form field fallback for multipart
-    token = request.form.get("auth") or request.form.get("token")
-    if token:
-        return token.strip()
-
-    return None
-
-def verify_firebase_token():
-    """Verify Firebase ID token from header or query param."""
-    raw_token = _extract_id_token()
-    if not raw_token:
-        return None
-    try:
-        decoded = auth.verify_id_token(raw_token)
-        return decoded  # includes uid, email, etc.
-    except Exception as e:
-        print(f"Auth error: {e}")
-        return None
-
-from functools import wraps
-def login_required(f):
-    """Decorator to protect routes with Firebase auth (header or query)."""
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        user = verify_firebase_token()
-        if not user:
-            return jsonify({"success": False, "error": "Unauthorized. Please log in."}), 401
-        return f(user, *args, **kwargs)
-    return wrapper
+def require_user(fn):
+    """Decorator that ensures the request passed IAP."""
+    @wraps(fn)
+    def _wrap(*args, **kwargs):
+        email = current_user_email()
+        if not email:
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+        return fn(*args, **kwargs)
+    return _wrap
 
 # ===============================
 # 🔹 GCP Configuration
@@ -168,13 +144,12 @@ def run_analysis(table_name):
     return table_name
 
 # ===============================
-# 🔹 Routes
+# 🔹 Routes (IAP-protected)
 # ===============================
 @app.route('/', methods=['GET', 'POST'])
+@require_user
 def index():
-    user = verify_firebase_token(request)
-    if not user:
-        return jsonify({"success": False, "error": "Unauthorized. Please log in."}), 401
+    user_email = current_user_email()
 
     if request.method == 'POST':
         uploaded_file = request.files.get('file')
@@ -210,7 +185,7 @@ def index():
                     "success": True,
                     "message": f"✅ Uploaded {uploaded_file.filename} and analysis complete",
                     "table": table_name,
-                    "user": user.get("email")
+                    "user": user_email
                 })
 
             except Exception as e:
@@ -219,11 +194,8 @@ def index():
     return render_template('index.html')
 
 @app.route('/download/<filename>')
+@require_user
 def download_file(filename):
-    user = verify_firebase_token(request)
-    if not user:
-        return "Unauthorized", 401
-
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(f"analysis_results/{filename}")
 
@@ -235,11 +207,8 @@ def download_file(filename):
     return send_file(temp_path, mimetype='text/csv', as_attachment=True, download_name=filename)
 
 @app.route('/download_bq')
+@require_user
 def download_bq():
-    user = verify_firebase_token(request)
-    if not user:
-        return "Unauthorized", 401
-
     table_name = request.args.get("table")
     if not table_name:
         return "Missing ?table parameter.", 400
@@ -263,18 +232,15 @@ def download_bq():
     return send_file(temp_path, mimetype='text/csv', as_attachment=True, download_name=f"{table_name}_analysis.csv")
 
 @app.route("/whoami")
+@require_user
 def whoami():
-    """Return basic info about the logged-in Firebase user."""
-    user = verify_firebase_token(request)
-    if not user:
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    """Return the IAP-authenticated user's email."""
+    return jsonify({"success": True, "email": current_user_email()})
 
-    return jsonify({
-        "success": True,
-        "uid": user.get("uid"),
-        "email": user.get("email"),
-        "name": user.get("name")
-    })
+# (optional) simple health endpoint without auth (keep if you want LB checks)
+@app.route("/healthz")
+def healthz():
+    return "ok", 200
 
 # ===============================
 # 🔹 Start Flask App
