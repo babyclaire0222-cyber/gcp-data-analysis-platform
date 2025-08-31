@@ -1,53 +1,41 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8" />
   <title>Data Analysis Platform</title>
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
+    :root { --ok:#4CAF50; --ok2:#45a049; --err:#f8d7da; --errtx:#721c24; --okbg:#d4edda; --oktx:#155724; }
     body { font-family: Arial, sans-serif; margin: 40px; }
-    .container { max-width: 700px; margin: auto; }
-    h1 { color: #333; }
-    form { margin-bottom: 20px; }
-    input[type="file"], input[type="text"], input[type="email"], input[type="password"] {
-      padding: 8px; margin-bottom: 10px; width: 100%;
-    }
-    button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; cursor: pointer; }
-    button:hover { background-color: #45a049; }
-    .message { margin-top: 20px; padding: 10px; border-radius: 4px; }
-    .success { background-color: #d4edda; color: #155724; }
-    .error { background-color: #f8d7da; color: #721c24; }
-    #download-link { display: none; margin-top: 15px; }
-    #auth-section { margin-bottom: 20px; }
-    .dim { opacity: 0.6; }
+    .container { max-width: 720px; margin: auto; }
+    h1 { color: #333; margin-bottom: 10px; }
+    form { margin: 16px 0 24px; }
+    input[type="file"], input[type="text"] { padding: 8px; margin-bottom: 10px; width: 100%; box-sizing: border-box; }
+    button { padding: 10px 20px; background-color: var(--ok); color: #fff; border: none; cursor: pointer; border-radius: 4px; }
+    button:hover { background-color: var(--ok2); }
+    .message { margin-top: 16px; padding: 10px; border-radius: 4px; display:none; }
+    .success { background-color: var(--okbg); color: var(--oktx); }
+    .error { background-color: var(--err); color: var(--errtx); }
+    #download-link { display: none; margin-top: 12px; }
+    .dim { opacity: 0.6; pointer-events: none; }
+    .badge { display:inline-block; background:#eef; color:#335; padding:6px 10px; border-radius: 16px; font-size: 12px; }
+    .muted { color:#666; font-size: 14px; }
+    hr { border:0; border-top:1px solid #eee; margin: 24px 0; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Data Analysis Platform</h1>
+    <p class="muted">Access is protected by <strong>Google Cloud IAP</strong>. If you’re not signed in, you’ll be redirected by IAP automatically.</p>
 
-    <!-- 🔐 Firebase Auth Section -->
-    <div id="auth-section">
-      <h3>Register</h3>
-      <input type="email" id="reg-email" placeholder="Email">
-      <input type="password" id="reg-password" placeholder="Password">
-      <button id="register-btn">Register</button>
+    <!-- Signed-in user (from IAP via /whoami) -->
+    <p id="user-info" class="badge" style="display:none;"></p>
+    <div id="auth-message" class="message error" style="display:none;"></div>
 
-      <h3>Login</h3>
-      <input type="email" id="login-email" placeholder="Email">
-      <input type="password" id="login-password" placeholder="Password">
-      <button id="login-btn">Login</button>
-      <button id="google-login-btn">Login with Google</button>
-      <button id="logout-btn" style="display:none;">Logout</button>
-
-      <p id="user-info" style="font-weight:bold;"></p>
-      <div id="auth-message" class="message" style="display:none;"></div>
-    </div>
-
-    <!-- ⬆️ Upload Section (shown after login) -->
+    <!-- Upload Section (enabled once /whoami returns 200) -->
     <div id="upload-section" class="dim" style="display:none;">
       <form id="uploadForm" method="POST" enctype="multipart/form-data">
-        <input type="file" name="file" required>
+        <input type="file" name="file" required />
         <button type="submit">Upload & Analyze</button>
       </form>
 
@@ -59,136 +47,54 @@
       </div>
     </div>
 
-    <hr>
+    <hr />
 
-    <!-- 📥 Manual BigQuery Download -->
+    <!-- Manual BigQuery Download -->
     <h2>Manual BigQuery Download</h2>
     <form id="downloadForm">
-      <input type="text" name="table" placeholder="Enter table name" required>
+      <input type="text" name="table" placeholder="Enter table name" required />
       <button type="submit">Download Latest Analysis</button>
     </form>
   </div>
 
   <script>
-    // ===========================
-    // 🔧 Firebase configuration
-    // ===========================
-    const firebaseConfig = {
-      apiKey: "AIzaSyBhSeQrn4vDzr8910pEziwvlYOra1WC7jQ",
-      authDomain: "data-analysis-webapp.firebaseapp.com",
-      projectId: "data-analysis-webapp",
-      storageBucket: "data-analysis-webapp.appspot.com",
-      messagingSenderId: "835249000571",
-      appId: "1:835249000571:web:81e2cb70e84e53194812de",
-      measurementId: "G-JV8TWVXNDV"
+    // Helper to show messages
+    const showMsg = (el, text, ok=false) => {
+      el.textContent = text;
+      el.className = "message " + (ok ? "success" : "error");
+      el.style.display = "block";
     };
-    firebase.initializeApp(firebaseConfig);
-    const auth = firebase.auth();
 
-    // UI elements
-    let idToken = null;
-    const regBtn = document.getElementById("register-btn");
-    const loginBtn = document.getElementById("login-btn");
-    const googleLoginBtn = document.getElementById("google-login-btn");
-    const logoutBtn = document.getElementById("logout-btn");
-    const userInfo = document.getElementById("user-info");
-    const uploadSection = document.getElementById("upload-section");
-    const authMsg = document.getElementById("auth-message");
+    // On load: check whoami (IAP header should make this 200)
+    (async function boot() {
+      const userInfo = document.getElementById("user-info");
+      const authMsg  = document.getElementById("auth-message");
+      const upload   = document.getElementById("upload-section");
 
-    // Helpers
-    const showAuthMsg = (msg, ok=false) => {
-      authMsg.textContent = msg;
-      authMsg.className = "message " + (ok ? "success" : "error");
-      authMsg.style.display = "block";
-    };
-    const clearAuthMsg = () => { authMsg.style.display = "none"; };
-
-    // 📝 Register with Email & Password
-    regBtn.onclick = async () => {
-      clearAuthMsg();
-      const email = document.getElementById("reg-email").value.trim();
-      const password = document.getElementById("reg-password").value;
       try {
-        await auth.createUserWithEmailAndPassword(email, password);
-        showAuthMsg("✅ Registered successfully! Please proceed to login.", true);
-      } catch (err) {
-        showAuthMsg("❌ " + err.message);
-      }
-    };
+        const resp = await fetch("/whoami", { credentials: "include" });
+        if (resp.status === 200) {
+          const data = await resp.json();
+          const email = (data && data.email) || "(unknown)";
+          userInfo.textContent = `Signed in as: ${email}`;
+          userInfo.style.display = "inline-block";
 
-    // 🔑 Login with Email & Password
-    loginBtn.onclick = async () => {
-      clearAuthMsg();
-      const email = document.getElementById("login-email").value.trim();
-      const password = document.getElementById("login-password").value;
-      try {
-        await auth.signInWithEmailAndPassword(email, password);
-      } catch (err) {
-        showAuthMsg("❌ " + err.message);
-      }
-    };
-
-    // 🔓 Google Login
-    googleLoginBtn.onclick = async () => {
-      clearAuthMsg();
-      try {
-        const provider = new firebase.auth.GoogleAuthProvider();
-        await auth.signInWithPopup(provider);
-      } catch (err) {
-        showAuthMsg("❌ " + err.message);
-      }
-    };
-
-    // 🚪 Logout
-    logoutBtn.onclick = () => auth.signOut();
-
-    // 🔄 Refresh ID token periodically (tokens expire)
-    async function refreshToken(user) {
-      if (!user) return;
-      idToken = await user.getIdToken(true);
-    }
-    setInterval(() => auth.currentUser && refreshToken(auth.currentUser), 5 * 60 * 1000);
-
-    // 👀 Auth state listener
-    auth.onAuthStateChanged(async (user) => {
-      clearAuthMsg();
-      const messageDiv = document.getElementById("message");
-      const downloadDiv = document.getElementById("download-link");
-      messageDiv.style.display = "none";
-      downloadDiv.style.display = "none";
-
-      if (user) {
-        idToken = await user.getIdToken();
-        userInfo.textContent = `Logged in as: ${user.email}`;
-        logoutBtn.style.display = "inline-block";
-        uploadSection.style.display = "block";
-        uploadSection.classList.remove("dim");
-
-        // Verify token with backend and show whoami
-        try {
-          const who = await fetch("/whoami", {
-            headers: { Authorization: "Bearer " + idToken }
-          });
-          if (who.status === 200) {
-            const data = await who.json();
-            userInfo.textContent = `Logged in as: ${data.email || user.email}`;
-          } else if (who.status === 401) {
-            showAuthMsg("❌ Backend says you're unauthorized. Please refresh or log in again.");
-          }
-        } catch (e) {
-          // Non-fatal; still logged in on client
-          console.warn("whoami failed:", e);
+          upload.style.display = "block";
+          upload.classList.remove("dim");
+          authMsg.style.display = "none";
+        } else if (resp.status === 401) {
+          // IAP should have intercepted already; if we ever get here, hint user to re-auth
+          showMsg(authMsg, "Not authorized. Please refresh to sign in via Google.", false);
+          upload.style.display = "none";
+        } else {
+          showMsg(authMsg, "Unexpected response from server. Try refreshing the page.", false);
         }
-      } else {
-        userInfo.textContent = "";
-        logoutBtn.style.display = "none";
-        uploadSection.style.display = "none";
-        uploadSection.classList.add("dim");
-        idToken = null;
+      } catch (e) {
+        showMsg(authMsg, "Unable to reach server. Check your connection or try again.", false);
       }
-    });
+    })();
 
-    // 📤 File upload (sends token in header)
+    // File upload
     document.getElementById("uploadForm").onsubmit = async function(e) {
       e.preventDefault();
       const formData = new FormData(this);
@@ -198,53 +104,41 @@
 
       messageDiv.style.display = "none";
       downloadDiv.style.display = "none";
-      messageDiv.className = "message";
-      messageDiv.innerHTML = "⏳ Uploading file & processing in BigQuery...";
-      messageDiv.style.display = "block";
+      showMsg(messageDiv, "⏳ Uploading file & processing in BigQuery...", true);
 
       try {
-        const response = await fetch("/", {
-          method: "POST",
-          headers: { Authorization: "Bearer " + idToken },
-          body: formData
-        });
-        const result = await response.json();
+        const response = await fetch("/", { method: "POST", body: formData, credentials: "include" });
+        const result = await response.json().catch(() => ({}));
 
         if (response.status === 401) {
           messageDiv.className = "message error";
-          messageDiv.innerHTML = "❌ Unauthorized. Please log in again.";
+          messageDiv.textContent = "❌ Unauthorized. Please refresh to sign in via Google.";
           return;
         }
 
-        if (result.success) {
-          messageDiv.className = "message success";
-          messageDiv.innerHTML = "✅ " + result.message;
-
+        if (result && result.success) {
+          showMsg(messageDiv, "✅ " + (result.message || "Completed"), true);
           if (result.table) {
-            // Append token for plain download link
-            downloadUrl.href = `/download_bq?table=${encodeURIComponent(result.table)}&auth=${encodeURIComponent(idToken)}`;
+            downloadUrl.href = `/download_bq?table=${encodeURIComponent(result.table)}`;
             downloadDiv.style.display = "block";
           }
         } else {
           messageDiv.className = "message error";
-          messageDiv.innerHTML = "❌ " + (result.error || "Unknown error");
+          messageDiv.textContent = "❌ " + (result.error || "Unknown error");
         }
       } catch (err) {
         messageDiv.className = "message error";
-        messageDiv.innerHTML = "❌ Upload failed: " + err.message;
+        messageDiv.textContent = "❌ Upload failed: " + err.message;
       }
     };
 
-    // 📥 Manual download (plain link that includes token)
+    // Manual download
     document.getElementById("downloadForm").onsubmit = function(e) {
       e.preventDefault();
       const table = this.table.value.trim();
-      if (!idToken) {
-        alert("Please log in first.");
-        return;
-      }
       if (table) {
-        window.location.href = `/download_bq?table=${encodeURIComponent(table)}&auth=${encodeURIComponent(idToken)}`;
+        // No tokens needed—request already passed IAP
+        window.location.href = `/download_bq?table=${encodeURIComponent(table)}`;
       }
     };
   </script>
