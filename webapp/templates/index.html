@@ -55,8 +55,30 @@
       <input type="text" name="table" placeholder="Enter table name" required />
       <button type="submit">Download Latest Analysis</button>
     </form>
+
+    <hr />
+
+    <!-- Finance Reports -->
+    <h2>Finance Reports</h2>
+    <div id="reports-block" style="margin-bottom:16px;">
+      <label for="report-table">Table name</label>
+      <input id="report-table" type="text" placeholder="e.g. finance_data" style="width:100%;padding:8px;margin:6px 0;" />
+
+      <label for="report-select">Choose a report</label>
+      <select id="report-select" style="width:100%;padding:8px;margin:6px 0;"></select>
+
+      <button id="run-report-btn">Run Report</button>
+      <a id="download-report-btn" href="#" style="display:none; margin-left:10px;">Download CSV</a>
+
+      <div id="report-msg" class="message" style="display:none;"></div>
+
+      <div id="report-results" style="margin-top:12px; overflow:auto;">
+        <!-- results table will be injected here -->
+      </div>
+    </div>
   </div>
 
+  <!-- ========== Script block #1: core IAP flow + upload/download ========== -->
   <script>
     // Helper to show messages
     const showMsg = (el, text, ok=false) => {
@@ -139,6 +161,83 @@
       if (table) {
         // No tokens needed—request already passed IAP
         window.location.href = `/download_bq?table=${encodeURIComponent(table)}`;
+      }
+    };
+  </script>
+
+  <!-- ========== Script block #2: finance reports UI ========== -->
+  <script>
+    // Fetch available reports on load
+    async function loadReports() {
+      const sel = document.getElementById("report-select");
+      if (!sel) return;
+      sel.innerHTML = "";
+      try {
+        const resp = await fetch("/reports", { credentials: "include" });
+        const data = await resp.json();
+        (data.reports || []).forEach(r => {
+          const opt = document.createElement("option");
+          opt.value = r.id;
+          opt.textContent = r.label;
+          sel.appendChild(opt);
+        });
+      } catch (e) {
+        console.warn("Failed to load reports", e);
+      }
+    }
+    loadReports();
+
+    function showReportMsg(text, ok=false) {
+      const el = document.getElementById("report-msg");
+      el.textContent = text;
+      el.className = "message " + (ok ? "success" : "error");
+      el.style.display = "block";
+    }
+
+    function renderTable(columns, rows) {
+      const container = document.getElementById("report-results");
+      if (!columns || !rows) { container.innerHTML=""; return; }
+
+      let html = "<table border='1' cellpadding='6' cellspacing='0' style='border-collapse:collapse; width:100%;'>";
+      html += "<thead><tr>" + columns.map(c => `<th>${c}</th>`).join("") + "</tr></thead>";
+      html += "<tbody>";
+      rows.forEach(r => {
+        html += "<tr>" + r.map(v => `<td>${v === null ? "" : v}</td>`).join("") + "</tr>";
+      });
+      html += "</tbody></table>";
+      container.innerHTML = html;
+    }
+
+    document.getElementById("run-report-btn").onclick = async () => {
+      const table = document.getElementById("report-table").value.trim();
+      const report = document.getElementById("report-select").value;
+      const dl = document.getElementById("download-report-btn");
+      if (!table) { showReportMsg("Please enter a table name."); return; }
+
+      showReportMsg("⏳ Running report...", true);
+      renderTable(null, null);
+      dl.style.display = "none";
+
+      try {
+        const resp = await fetch("/run_report", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ report, table, limit: 1000 })
+        });
+        const data = await resp.json();
+        if (!data.success) {
+          showReportMsg("❌ " + (data.error || "Failed to run report"));
+          return;
+        }
+        showReportMsg(`✅ ${data.row_count} rows`, true);
+        renderTable(data.columns, data.rows);
+
+        // enable CSV download
+        dl.href = `/download_report?report=${encodeURIComponent(report)}&table=${encodeURIComponent(table)}`;
+        dl.style.display = "inline-block";
+      } catch (e) {
+        showReportMsg("❌ " + e.message);
       }
     };
   </script>
