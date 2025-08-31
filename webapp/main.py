@@ -150,10 +150,6 @@ def run_analysis(table_name):
 # 🔹 Looker Studio publishing helpers (views in BigQuery)
 # ===============================
 
-def ensure_dataset_exists(dataset_id):
-    # (you already have this defined above; keep your version)
-    ...
-
 def _create_or_replace_view(view_id: str, sql: str):
     """
     Create or replace a standard BigQuery view.
@@ -199,7 +195,6 @@ def publish_looker_views_for_table(table_name: str) -> dict:
 # 📊 Prebuilt Finance Reports
 # -------------------------------
 REPORTS = {
-    # A) Total spend per department
     "dept_totals": {
         "label": "Total spend per department (6 months)",
         "sql": """
@@ -209,7 +204,6 @@ REPORTS = {
         ORDER BY total_spent DESC
         """
     },
-    # B) Monthly spend trend
     "monthly_trend": {
         "label": "Monthly spend trend",
         "sql": """
@@ -220,7 +214,6 @@ REPORTS = {
         ORDER BY month
         """
     },
-    # C) Top 5 expense categories overall
     "top_expense_types": {
         "label": "Top 5 expense categories",
         "sql": """
@@ -231,7 +224,6 @@ REPORTS = {
         LIMIT 5
         """
     },
-    # D) Department by month (matrix-friendly)
     "dept_month_matrix": {
         "label": "Department spend by month",
         "sql": """
@@ -243,7 +235,6 @@ REPORTS = {
         ORDER BY month, department
         """
     },
-    # E) Average monthly spend per department
     "avg_monthly_by_dept": {
         "label": "Average monthly spend per department",
         "sql": """
@@ -294,39 +285,40 @@ def index():
 
             table_name = os.path.splitext(uploaded_file.filename)[0].replace(" ", "_").lower()
 
-try:
-    if file_ext == '.sql':
-        bucket = storage_client.bucket(BUCKET_NAME)
-        blob = bucket.blob(f"uploads/{uploaded_file.filename}")
-        blob.upload_from_filename(file_path)
+            try:
+                if file_ext == '.sql':
+                    # Upload raw SQL to GCS then notify Pub/Sub
+                    bucket = storage_client.bucket(BUCKET_NAME)
+                    blob = bucket.blob(f"uploads/{uploaded_file.filename}")
+                    blob.upload_from_filename(file_path)
 
-        message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
-        publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
+                    message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
+                    publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
 
-    elif file_ext in ['.xlsx', '.xls']:
-        csv_path = f"/tmp/{table_name}.csv"
-        df = pd.read_excel(file_path)
-        df.to_csv(csv_path, index=False)
-        load_to_bigquery(csv_path, f"{table_name}.csv", table_name)
+                elif file_ext in ['.xlsx', '.xls']:
+                    # Convert Excel to CSV first
+                    csv_path = f"/tmp/{table_name}.csv"
+                    df = pd.read_excel(file_path)
+                    df.to_csv(csv_path, index=False)
+                    load_to_bigquery(csv_path, f"{table_name}.csv", table_name)
 
-    elif file_ext in ['.csv', '.json', '.parquet']:
-        load_to_bigquery(file_path, uploaded_file.filename, table_name)
+                elif file_ext in ['.csv', '.json', '.parquet']:
+                    load_to_bigquery(file_path, uploaded_file.filename, table_name)
 
-    else:
-        return jsonify({"success": False, "error": "Unsupported file format."}), 400
+                else:
+                    return jsonify({"success": False, "error": "Unsupported file format."}), 400
 
-    # Run downstream analysis
-    run_analysis(table_name)
-    return jsonify({
-        "success": True,
-        "message": f"✅ Uploaded {uploaded_file.filename} and analysis complete",
-        "table": table_name,
-        "user": user_email
-    })
+                # Run downstream analysis
+                run_analysis(table_name)
+                return jsonify({
+                    "success": True,
+                    "message": f"✅ Uploaded {uploaded_file.filename} and analysis complete",
+                    "table": table_name,
+                    "user": user_email
+                })
 
-except Exception as e:
-    return jsonify({"success": False, "error": str(e)}), 500
-
+            except Exception as e:
+                return jsonify({"success": False, "error": str(e)}), 500
 
     return render_template('index.html')
 
@@ -378,14 +370,13 @@ def whoami():
 @app.route("/healthz")
 def healthz():
     return "ok", 200
-    
+
 @app.route("/reports")
 @require_user
 def list_reports():
     """Return the list of available report ids + labels."""
     items = [{"id": k, "label": v["label"]} for k, v in REPORTS.items()]
     return jsonify({"reports": items})
-
 
 @app.route("/run_report", methods=["POST"])
 @require_user
@@ -416,7 +407,6 @@ def run_report():
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
-
 
 @app.route("/download_report")
 @require_user
@@ -474,7 +464,6 @@ def publish_looker_views():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
-
 @app.route("/looker_help")
 @require_user
 def looker_help():
@@ -500,6 +489,7 @@ def looker_help():
 # ===============================
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
 
 
 
