@@ -147,58 +147,61 @@ def run_analysis(table_name):
     return table_name
 
 # ===============================
-# 🔹 Looker Studio publishing helpers (views in BigQuery)
+# 🔹 Auto-detect finance column names
 # ===============================
+VALID_TABLE_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
-def _create_or_replace_view(view_id: str, sql: str):
-    """
-    Create or replace a standard BigQuery view.
-    view_id must be like: PROJECT.DATASET.VIEW_NAME
-    """
-    try:
-        # If it exists, update the query
-        existing = bq_client.get_table(view_id)
-        existing.view_query = sql
-        bq_client.update_table(existing, ["view_query"])
-        return existing
-    except NotFound:
-        # Create fresh view
-        table = bigquery.Table(view_id)
-        table.view_query = sql
-        return bq_client.create_table(table)
-
-def publish_looker_views_for_table(table_name: str) -> dict:
-    """
-    For each REPORT in REPORTS, create a view named:
-      <table>__<report_id>_v
-    e.g. finance_data__dept_totals_v
-    Returns a dict of {report_id: fully_qualified_view_id}
-    """
-    ensure_dataset_exists(BIGQUERY_DATASET)
+def _fq_table(table_name: str) -> str:
+    """Return fully-qualified table id, after validating a safe table name."""
     if not VALID_TABLE_RE.match(table_name):
         raise ValueError("Invalid table name. Use letters, numbers, or underscore only.")
+    return f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}"
 
-    table_fq = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}"
-    created = {}
-    for rid, meta in REPORTS.items():
-        view_name = f"{table_name}__{rid}_v"
-        view_fq = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{view_name}"
-        sql = meta["sql"].replace("{table_fq}", table_fq)
+def _table_schema_cols(table_fq: str):
+    """Return dict {lower_col_name: (original_name, field)}."""
+    tbl = bq_client.get_table(table_fq)
+    out = {}
+    for f in tbl.schema:
+        out[f.name.lower()] = (f.name, f)
+    return out
 
-        # Views must be a SELECT statement by itself (ours are)
-        _create_or_replace_view(view_fq, sql)
-        created[rid] = view_fq
+def _pick_column(cols: dict, candidates, required=True):
+    """Pick first existing column (case-insensitive) from candidates."""
+    for c in candidates:
+        got = cols.get(c.lower())
+        if got:
+            return got[0]
+    if required:
+        raise ValueError(f"Could not find any of columns: {candidates}")
+    return None
 
-    return created
+def _detect_finance_columns(table_fq: str):
+    """
+    Infer department, amount, date, expense_type column names from the table.
+    Extend candidate lists if needed to match your data.
+    """
+    cols = _table_schema_cols(table_fq)
 
-# -------------------------------
-# 📊 Prebuilt Finance Reports
-# -------------------------------
+    department = _pick_column(cols, ["department", "dept", "cost_center", "costcentre", "cost_centre"])
+    amount     = _pick_column(cols, ["amount", "total_amount", "spend", "cost", "value", "amt"])
+    date       = _pick_column(cols, ["date", "txn_date", "transaction_date", "post_date", "doc_date", "month", "period"])
+    expense    = _pick_column(cols, ["expense_type", "category", "type", "gl_code"], required=False)
+
+    return {
+        "department": department,
+        "amount": amount,
+        "date": date,
+        "expense_type": expense,  # may be None
+    }
+
+# ===============================
+# 📊 Prebuilt Finance Reports (templated)
+# ===============================
 REPORTS = {
     "dept_totals": {
         "label": "Total spend per department (6 months)",
         "sql": """
-        SELECT department, SUM(amount) AS total_spent
+        SELECT {department} AS department, SUM({amount}) AS total_spent
         FROM `{table_fq}`
         GROUP BY department
         ORDER BY total_spent DESC
@@ -207,8 +210,8 @@ REPORTS = {
     "monthly_trend": {
         "label": "Monthly spend trend",
         "sql": """
-        SELECT FORMAT_DATE('%Y-%m', DATE(date)) AS month,
-               SUM(amount) AS total_spent
+        SELECT FORMAT_DATE('%Y-%m', DATE({date})) AS month,
+               SUM({amount}) AS total_spent
         FROM `{table_fq}`
         GROUP BY month
         ORDER BY month
@@ -217,7 +220,7 @@ REPORTS = {
     "top_expense_types": {
         "label": "Top 5 expense categories",
         "sql": """
-        SELECT expense_type, SUM(amount) AS total_spent
+        SELECT {expense_type} AS expense_type, SUM({amount}) AS total_spent
         FROM `{table_fq}`
         GROUP BY expense_type
         ORDER BY total_spent DESC
@@ -227,9 +230,9 @@ REPORTS = {
     "dept_month_matrix": {
         "label": "Department spend by month",
         "sql": """
-        SELECT FORMAT_DATE('%Y-%m', DATE(date)) AS month,
-               department,
-               SUM(amount) AS total_spent
+        SELECT FORMAT_DATE('%Y-%m', DATE({date})) AS month,
+               {department} AS department,
+               SUM({amount}) AS total_spent
         FROM `{table_fq}`
         GROUP BY month, department
         ORDER BY month, department
@@ -239,9 +242,9 @@ REPORTS = {
         "label": "Average monthly spend per department",
         "sql": """
         WITH monthly AS (
-          SELECT department,
-                 FORMAT_DATE('%Y-%m', DATE(date)) AS month,
-                 SUM(amount) AS monthly_spent
+          SELECT {department} AS department,
+                 FORMAT_DATE('%Y-%m', DATE({date})) AS month,
+                 SUM({amount}) AS monthly_spent
           FROM `{table_fq}`
           GROUP BY department, month
         )
@@ -253,20 +256,59 @@ REPORTS = {
     },
 }
 
-VALID_TABLE_RE = re.compile(r"^[A-Za-z0-9_]+$")
-
-def _fq_table(table_name: str) -> str:
-    """Return fully-qualified table id, after validating a safe table name."""
-    if not VALID_TABLE_RE.match(table_name):
-        raise ValueError("Invalid table name. Use letters, numbers, or underscore only.")
-    return f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}"
-
 def _run_sql(sql: str, max_rows: int = 1000):
     job = bq_client.query(sql)
     result = job.result(max_results=max_rows)
     columns = [f.name for f in result.schema]
     rows = [list(row.values()) for row in result]
     return columns, rows
+
+# ===============================
+# 🔹 Looker Studio publishing helpers (views in BigQuery)
+# ===============================
+def _create_or_replace_view(view_id: str, sql: str):
+    """
+    Create or replace a standard BigQuery view.
+    view_id must be like: PROJECT.DATASET.VIEW_NAME
+    """
+    try:
+        existing = bq_client.get_table(view_id)
+        existing.view_query = sql
+        bq_client.update_table(existing, ["view_query"])
+        return existing
+    except NotFound:
+        table = bigquery.Table(view_id)
+        table.view_query = sql
+        return bq_client.create_table(table)
+
+def publish_looker_views_for_table(table_name: str) -> dict:
+    """
+    For each REPORT in REPORTS, create a view named:
+      <table>__<report_id>_v  (e.g., finance_data__dept_totals_v)
+    Returns dict {report_id: fully_qualified_view_id}
+    """
+    ensure_dataset_exists(BIGQUERY_DATASET)
+    if not VALID_TABLE_RE.match(table_name):
+        raise ValueError("Invalid table name. Use letters, numbers, or underscore only.")
+
+    table_fq = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}"
+    cols = _detect_finance_columns(table_fq)
+
+    created = {}
+    for rid, meta in REPORTS.items():
+        view_name = f"{table_name}__{rid}_v"
+        view_fq = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{view_name}"
+        sql = meta["sql"].format(
+            table_fq=table_fq,
+            department=cols["department"],
+            amount=cols["amount"],
+            date=cols["date"],
+            expense_type=cols["expense_type"] or "NULL",
+        )
+        _create_or_replace_view(view_fq, sql)
+        created[rid] = view_fq
+
+    return created
 
 # ===============================
 # 🔹 Routes (IAP-protected)
@@ -397,7 +439,14 @@ def run_report():
 
     try:
         table_fq = _fq_table(table)
-        sql = REPORTS[report_id]["sql"].replace("{table_fq}", table_fq)
+        cols = _detect_finance_columns(table_fq)
+        sql = REPORTS[report_id]["sql"].format(
+            table_fq=table_fq,
+            department=cols["department"],
+            amount=cols["amount"],
+            date=cols["date"],
+            expense_type=cols["expense_type"] or "NULL",
+        )
         columns, rows = _run_sql(sql, max_rows=limit)
         return jsonify({
             "success": True,
@@ -422,8 +471,14 @@ def download_report():
 
     try:
         table_fq = _fq_table(table)
-        sql = REPORTS[report_id]["sql"].replace("{table_fq}", table_fq)
-        # No row limit for CSV; adjust if needed
+        cols = _detect_finance_columns(table_fq)
+        sql = REPORTS[report_id]["sql"].format(
+            table_fq=table_fq,
+            department=cols["department"],
+            amount=cols["amount"],
+            date=cols["date"],
+            expense_type=cols["expense_type"] or "NULL",
+        )
         job = bq_client.query(sql)
         result = job.result()
 
@@ -435,7 +490,6 @@ def download_report():
             writer.writerow(list(row.values()))
         out.seek(0)
 
-        # Send as file
         return send_file(
             io.BytesIO(out.read().encode("utf-8")),
             mimetype="text/csv",
