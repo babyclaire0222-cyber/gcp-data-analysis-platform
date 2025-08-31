@@ -8,7 +8,7 @@ from google.cloud import storage, bigquery
 from google.cloud import pubsub_v1
 import re
 import io
-
+from google.api_core.exceptions import NotFound
 
 app = Flask(__name__)
 app.secret_key = "supersecret"  # Needed for flash messages
@@ -146,6 +146,55 @@ def run_analysis(table_name):
 
     return table_name
 
+# ===============================
+# 🔹 Looker Studio publishing helpers (views in BigQuery)
+# ===============================
+
+def ensure_dataset_exists(dataset_id):
+    # (you already have this defined above; keep your version)
+    ...
+
+def _create_or_replace_view(view_id: str, sql: str):
+    """
+    Create or replace a standard BigQuery view.
+    view_id must be like: PROJECT.DATASET.VIEW_NAME
+    """
+    try:
+        # If it exists, update the query
+        existing = bq_client.get_table(view_id)
+        existing.view_query = sql
+        bq_client.update_table(existing, ["view_query"])
+        return existing
+    except NotFound:
+        # Create fresh view
+        table = bigquery.Table(view_id)
+        table.view_query = sql
+        return bq_client.create_table(table)
+
+def publish_looker_views_for_table(table_name: str) -> dict:
+    """
+    For each REPORT in REPORTS, create a view named:
+      <table>__<report_id>_v
+    e.g. finance_data__dept_totals_v
+    Returns a dict of {report_id: fully_qualified_view_id}
+    """
+    ensure_dataset_exists(BIGQUERY_DATASET)
+    if not VALID_TABLE_RE.match(table_name):
+        raise ValueError("Invalid table name. Use letters, numbers, or underscore only.")
+
+    table_fq = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}"
+    created = {}
+    for rid, meta in REPORTS.items():
+        view_name = f"{table_name}__{rid}_v"
+        view_fq = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{view_name}"
+        sql = meta["sql"].replace("{table_fq}", table_fq)
+
+        # Views must be a SELECT statement by itself (ours are)
+        _create_or_replace_view(view_fq, sql)
+        created[rid] = view_fq
+
+    return created
+
 # -------------------------------
 # 📊 Prebuilt Finance Reports
 # -------------------------------
@@ -245,36 +294,39 @@ def index():
 
             table_name = os.path.splitext(uploaded_file.filename)[0].replace(" ", "_").lower()
 
-            try:
-                if file_ext == '.sql':
-                    # Handle SQL files with Pub/Sub
-                    message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
-                    publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
+try:
+    if file_ext == '.sql':
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob = bucket.blob(f"uploads/{uploaded_file.filename}")
+        blob.upload_from_filename(file_path)
 
-                elif file_ext in ['.xlsx', '.xls']:
-                    # Convert Excel to CSV first
-                    csv_path = f"/tmp/{table_name}.csv"
-                    df = pd.read_excel(file_path)
-                    df.to_csv(csv_path, index=False)
-                    load_to_bigquery(csv_path, f"{table_name}.csv", table_name)
+        message_data = {'name': uploaded_file.filename, 'bucket': BUCKET_NAME}
+        publisher.publish(topic_path, data=json.dumps(message_data).encode('utf-8'))
 
-                elif file_ext in ['.csv', '.json', '.parquet']:
-                    load_to_bigquery(file_path, uploaded_file.filename, table_name)
+    elif file_ext in ['.xlsx', '.xls']:
+        csv_path = f"/tmp/{table_name}.csv"
+        df = pd.read_excel(file_path)
+        df.to_csv(csv_path, index=False)
+        load_to_bigquery(csv_path, f"{table_name}.csv", table_name)
 
-                else:
-                    return jsonify({"success": False, "error": "Unsupported file format."}), 400
+    elif file_ext in ['.csv', '.json', '.parquet']:
+        load_to_bigquery(file_path, uploaded_file.filename, table_name)
 
-                # Run downstream analysis
-                run_analysis(table_name)
-                return jsonify({
-                    "success": True,
-                    "message": f"✅ Uploaded {uploaded_file.filename} and analysis complete",
-                    "table": table_name,
-                    "user": user_email
-                })
+    else:
+        return jsonify({"success": False, "error": "Unsupported file format."}), 400
 
-            except Exception as e:
-                return jsonify({"success": False, "error": str(e)}), 500
+    # Run downstream analysis
+    run_analysis(table_name)
+    return jsonify({
+        "success": True,
+        "message": f"✅ Uploaded {uploaded_file.filename} and analysis complete",
+        "table": table_name,
+        "user": user_email
+    })
+
+except Exception as e:
+    return jsonify({"success": False, "error": str(e)}), 500
+
 
     return render_template('index.html')
 
@@ -403,6 +455,45 @@ def download_report():
     except Exception as e:
         return f"Error: {e}", 500
 
+@app.route("/publish_looker_views", methods=["POST"])
+@require_user
+def publish_looker_views():
+    """
+    Body JSON: { "table": "finance_data" }
+    Creates/updates one view per prebuilt report, e.g.:
+      data-analysis-webapp.analysis_dataset.finance_data__dept_totals_v
+    Returns JSON listing the view IDs you can pick in Looker Studio.
+    """
+    data = request.get_json(silent=True) or {}
+    table = data.get("table")
+    if not table:
+        return jsonify({"success": False, "error": "Missing 'table'."}), 400
+    try:
+        views = publish_looker_views_for_table(table)
+        return jsonify({"success": True, "views": views})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/looker_help")
+@require_user
+def looker_help():
+    """
+    Returns the project/dataset and a short how-to for Looker Studio.
+    """
+    return jsonify({
+        "success": True,
+        "project_id": PROJECT_ID,
+        "dataset": BIGQUERY_DATASET,
+        "how_to": [
+            "Open https://lookerstudio.google.com → Create → Report.",
+            "Add data → BigQuery connector.",
+            f"Pick project '{PROJECT_ID}' → dataset '{BIGQUERY_DATASET}'.",
+            "Choose any of the *_v views you created (e.g. finance_data__dept_totals_v).",
+            "Click CONNECT, then add charts (bar/line/pie) as needed."
+        ],
+        "tip": "Re-run /publish_looker_views after uploading a new base table name."
+    })
 
 # ===============================
 # 🔹 Start Flask App
