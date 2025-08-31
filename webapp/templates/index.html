@@ -7,10 +7,12 @@
   <style>
     :root { --ok:#4CAF50; --ok2:#45a049; --err:#f8d7da; --errtx:#721c24; --okbg:#d4edda; --oktx:#155724; }
     body { font-family: Arial, sans-serif; margin: 40px; }
-    .container { max-width: 720px; margin: auto; }
+    .container { max-width: 920px; margin: auto; }
     h1 { color: #333; margin-bottom: 10px; }
     form { margin: 16px 0 24px; }
-    input[type="file"], input[type="text"] { padding: 8px; margin-bottom: 10px; width: 100%; box-sizing: border-box; }
+    input[type="file"], input[type="text"] {
+      padding: 8px; margin-bottom: 10px; width: 100%; box-sizing: border-box;
+    }
     button { padding: 10px 20px; background-color: var(--ok); color: #fff; border: none; cursor: pointer; border-radius: 4px; }
     button:hover { background-color: var(--ok2); }
     .message { margin-top: 16px; padding: 10px; border-radius: 4px; display:none; }
@@ -21,12 +23,17 @@
     .badge { display:inline-block; background:#eef; color:#335; padding:6px 10px; border-radius: 16px; font-size: 12px; }
     .muted { color:#666; font-size: 14px; }
     hr { border:0; border-top:1px solid #eee; margin: 24px 0; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #eee; padding: 6px 8px; text-align: left; }
+    th { background: #fafafa; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Data Analysis Platform</h1>
-    <p class="muted">Access is protected by <strong>Google Cloud IAP</strong>. If you’re not signed in, you’ll be redirected by IAP automatically.</p>
+    <p class="muted">
+      Access is protected by <strong>Google Cloud IAP</strong>. If you’re not signed in, IAP will handle the sign-in.
+    </p>
 
     <!-- Signed-in user (from IAP via /whoami) -->
     <p id="user-info" class="badge" style="display:none;"></p>
@@ -62,7 +69,7 @@
     <h2>Finance Reports</h2>
     <div id="reports-block" style="margin-bottom:16px;">
       <label for="report-table">Table name</label>
-      <input id="report-table" type="text" placeholder="e.g. finance_data" style="width:100%;padding:8px;margin:6px 0;" />
+      <input id="report-table" type="text" placeholder="e.g. finance_6months_data" style="width:100%;padding:8px;margin:6px 0;" />
 
       <label for="report-select">Choose a report</label>
       <select id="report-select" style="width:100%;padding:8px;margin:6px 0;"></select>
@@ -75,6 +82,34 @@
       <div id="report-results" style="margin-top:12px; overflow:auto;">
         <!-- results table will be injected here -->
       </div>
+    </div>
+
+    <hr />
+
+    <!-- Looker Studio Views -->
+    <h2>Publish Looker Studio Views</h2>
+    <p class="muted">
+      This creates/updates one BigQuery <em>view</em> per report for the table you specify
+      (e.g. <code>finance_6months_data__dept_totals_v</code>). Then you can connect to those views from Looker Studio.
+    </p>
+
+    <div id="looker-block" style="margin-bottom:16px;">
+      <label for="looker-table">Table name</label>
+      <input id="looker-table" type="text" placeholder="e.g. finance_6months_data"
+             style="width:100%;padding:8px;margin:6px 0;" />
+
+      <button id="publish-views-btn">Publish/Update Views</button>
+      <button id="show-help-btn" type="button" style="margin-left:8px;">Show Looker Studio help</button>
+
+      <div id="views-msg" class="message" style="display:none;"></div>
+
+      <div id="views-results" style="margin-top:12px; display:none;">
+        <h4 style="margin:0 0 8px;">Created/Updated views</h4>
+        <ul id="views-list" style="padding-left:18px; margin:0;"></ul>
+        <p class="muted" id="bq-hint" style="margin-top:8px; display:none;"></p>
+      </div>
+
+      <div id="looker-help" class="message" style="display:none;"></div>
     </div>
   </div>
 
@@ -105,7 +140,7 @@
           upload.classList.remove("dim");
           authMsg.style.display = "none";
         } else if (resp.status === 401) {
-          // IAP should have intercepted already; if we ever get here, hint user to re-auth
+          // IAP should have intercepted; if we get here, hint user to re-auth
           showMsg(authMsg, "Not authorized. Please refresh to sign in via Google.", false);
           upload.style.display = "none";
         } else {
@@ -141,6 +176,13 @@
         if (result && result.success) {
           showMsg(messageDiv, "✅ " + (result.message || "Completed"), true);
           if (result.table) {
+            // Prefill table fields in Reports & Looker sections
+            const t = result.table;
+            const reportTable = document.getElementById("report-table");
+            const lookerTable = document.getElementById("looker-table");
+            if (reportTable) reportTable.value = t;
+            if (lookerTable) lookerTable.value = t;
+
             downloadUrl.href = `/download_bq?table=${encodeURIComponent(result.table)}`;
             downloadDiv.style.display = "block";
           }
@@ -159,7 +201,6 @@
       e.preventDefault();
       const table = this.table.value.trim();
       if (table) {
-        // No tokens needed—request already passed IAP
         window.location.href = `/download_bq?table=${encodeURIComponent(table)}`;
       }
     };
@@ -198,7 +239,7 @@
       const container = document.getElementById("report-results");
       if (!columns || !rows) { container.innerHTML=""; return; }
 
-      let html = "<table border='1' cellpadding='6' cellspacing='0' style='border-collapse:collapse; width:100%;'>";
+      let html = "<table>";
       html += "<thead><tr>" + columns.map(c => `<th>${c}</th>`).join("") + "</tr></thead>";
       html += "<tbody>";
       rows.forEach(r => {
@@ -240,6 +281,121 @@
         showReportMsg("❌ " + e.message);
       }
     };
+  </script>
+
+  <!-- ========== Script block #3: Looker views publishing ========== -->
+  <script>
+    const showViewsMsg = (text, ok=false) => {
+      const el = document.getElementById("views-msg");
+      el.textContent = text;
+      el.className = "message " + (ok ? "success" : "error");
+      el.style.display = "block";
+    };
+
+    function clearViewsOutput() {
+      document.getElementById("views-results").style.display = "none";
+      document.getElementById("views-list").innerHTML = "";
+      document.getElementById("bq-hint").style.display = "none";
+      document.getElementById("looker-help").style.display = "none";
+    }
+
+    function renderViewsList(viewsMap, projectId, dataset) {
+      const container = document.getElementById("views-results");
+      const list = document.getElementById("views-list");
+      list.innerHTML = "";
+
+      Object.entries(viewsMap || {}).forEach(([rid, fqid]) => {
+        const li = document.createElement("li");
+        li.style.margin = "6px 0";
+
+        const copyBtn = document.createElement("button");
+        copyBtn.textContent = "Copy ID";
+        copyBtn.style.marginRight = "8px";
+        copyBtn.onclick = async () => { await navigator.clipboard.writeText(fqid); };
+
+        // Link opens dataset in BigQuery console (you’ll see the view in the left tree)
+        const bqLink = document.createElement("a");
+        bqLink.href = `https://console.cloud.google.com/bigquery?project=${encodeURIComponent(projectId)}&ws=!1m5!1m4!4m3!1s${encodeURIComponent(projectId)}!2s${encodeURIComponent(dataset)}!3s`;
+        bqLink.target = "_blank";
+        bqLink.rel = "noopener";
+        bqLink.textContent = fqid;
+
+        li.appendChild(copyBtn);
+        li.appendChild(bqLink);
+        list.appendChild(li);
+      });
+
+      const hint = document.getElementById("bq-hint");
+      hint.textContent = `Tip: The link opens your dataset (${projectId}.${dataset}) in BigQuery Console. Views appear on the left panel.`;
+      hint.style.display = "block";
+
+      container.style.display = "block";
+    }
+
+    async function fetchLookerHelp() {
+      try {
+        const resp = await fetch("/looker_help", { credentials: "include" });
+        const data = await resp.json();
+        if (!data.success) throw new Error("Help not available");
+
+        const help = document.getElementById("looker-help");
+        const proj = data.project_id;
+        const ds   = data.dataset;
+        const bullets = (data.how_to || []).map(x => `<li>${x}</li>`).join("");
+        const lookerHome = `https://lookerstudio.google.com/`;
+
+        help.innerHTML = `
+          <div><strong>Project:</strong> <code>${proj}</code> &nbsp; <strong>Dataset:</strong> <code>${ds}</code></div>
+          <ul style="margin:8px 0 12px 18px;">${bullets}</ul>
+          <a href="${lookerHome}" target="_blank" rel="noopener">Open Looker Studio</a>
+          <div class="muted" style="margin-top:8px;">${data.tip || ""}</div>
+        `;
+        help.className = "message success";
+        help.style.display = "block";
+      } catch(e) {
+        const help = document.getElementById("looker-help");
+        help.textContent = "Could not load Looker Studio help right now.";
+        help.className = "message error";
+        help.style.display = "block";
+      }
+    }
+
+    document.getElementById("publish-views-btn").onclick = async () => {
+      clearViewsOutput();
+      const table = document.getElementById("looker-table").value.trim();
+      if (!table) { showViewsMsg("Please enter a table name."); return; }
+
+      showViewsMsg("⏳ Publishing views...", true);
+
+      try {
+        // Get project/dataset for nicer links
+        const helpResp = await fetch("/looker_help", { credentials: "include" });
+        const helpData = await helpResp.json();
+        const projectId = helpData.project_id;
+        const dataset   = helpData.dataset;
+
+        // Publish the views
+        const resp = await fetch("/publish_looker_views", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ table })
+        });
+        const data = await resp.json();
+
+        if (!data.success) {
+          showViewsMsg("❌ " + (data.error || "Failed to publish views"));
+          return;
+        }
+
+        showViewsMsg("✅ Views created/updated successfully.", true);
+        renderViewsList(data.views || {}, projectId, dataset);
+      } catch (e) {
+        showViewsMsg("❌ " + e.message);
+      }
+    };
+
+    document.getElementById("show-help-btn").onclick = fetchLookerHelp;
   </script>
 </body>
 </html>
