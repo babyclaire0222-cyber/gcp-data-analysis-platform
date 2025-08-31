@@ -6,6 +6,9 @@ import pandas as pd
 from functools import wraps
 from google.cloud import storage, bigquery
 from google.cloud import pubsub_v1
+import re
+import io
+
 
 app = Flask(__name__)
 app.secret_key = "supersecret"  # Needed for flash messages
@@ -143,6 +146,88 @@ def run_analysis(table_name):
 
     return table_name
 
+# -------------------------------
+# 📊 Prebuilt Finance Reports
+# -------------------------------
+REPORTS = {
+    # A) Total spend per department
+    "dept_totals": {
+        "label": "Total spend per department (6 months)",
+        "sql": """
+        SELECT department, SUM(amount) AS total_spent
+        FROM `{table_fq}`
+        GROUP BY department
+        ORDER BY total_spent DESC
+        """
+    },
+    # B) Monthly spend trend
+    "monthly_trend": {
+        "label": "Monthly spend trend",
+        "sql": """
+        SELECT FORMAT_DATE('%Y-%m', DATE(date)) AS month,
+               SUM(amount) AS total_spent
+        FROM `{table_fq}`
+        GROUP BY month
+        ORDER BY month
+        """
+    },
+    # C) Top 5 expense categories overall
+    "top_expense_types": {
+        "label": "Top 5 expense categories",
+        "sql": """
+        SELECT expense_type, SUM(amount) AS total_spent
+        FROM `{table_fq}`
+        GROUP BY expense_type
+        ORDER BY total_spent DESC
+        LIMIT 5
+        """
+    },
+    # D) Department by month (matrix-friendly)
+    "dept_month_matrix": {
+        "label": "Department spend by month",
+        "sql": """
+        SELECT FORMAT_DATE('%Y-%m', DATE(date)) AS month,
+               department,
+               SUM(amount) AS total_spent
+        FROM `{table_fq}`
+        GROUP BY month, department
+        ORDER BY month, department
+        """
+    },
+    # E) Average monthly spend per department
+    "avg_monthly_by_dept": {
+        "label": "Average monthly spend per department",
+        "sql": """
+        WITH monthly AS (
+          SELECT department,
+                 FORMAT_DATE('%Y-%m', DATE(date)) AS month,
+                 SUM(amount) AS monthly_spent
+          FROM `{table_fq}`
+          GROUP BY department, month
+        )
+        SELECT department, AVG(monthly_spent) AS avg_monthly_spent
+        FROM monthly
+        GROUP BY department
+        ORDER BY avg_monthly_spent DESC
+        """
+    },
+}
+
+VALID_TABLE_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+def _fq_table(table_name: str) -> str:
+    """Return fully-qualified table id, after validating a safe table name."""
+    if not VALID_TABLE_RE.match(table_name):
+        raise ValueError("Invalid table name. Use letters, numbers, or underscore only.")
+    return f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}"
+
+def _run_sql(sql: str, max_rows: int = 1000):
+    job = bq_client.query(sql)
+    result = job.result(max_results=max_rows)
+    columns = [f.name for f in result.schema]
+    rows = [list(row.values()) for row in result]
+    return columns, rows
+
 # ===============================
 # 🔹 Routes (IAP-protected)
 # ===============================
@@ -241,6 +326,83 @@ def whoami():
 @app.route("/healthz")
 def healthz():
     return "ok", 200
+    
+@app.route("/reports")
+@require_user
+def list_reports():
+    """Return the list of available report ids + labels."""
+    items = [{"id": k, "label": v["label"]} for k, v in REPORTS.items()]
+    return jsonify({"reports": items})
+
+
+@app.route("/run_report", methods=["POST"])
+@require_user
+def run_report():
+    """
+    Body JSON: { "report": "<id from /reports>", "table": "<your_table>", "limit": 1000? }
+    Returns: { columns: [...], rows: [[...]], row_count: N }
+    """
+    data = request.get_json(silent=True) or {}
+    report_id = data.get("report")
+    table = data.get("table")
+    limit = int(data.get("limit") or 1000)
+
+    if report_id not in REPORTS:
+        return jsonify({"success": False, "error": "Unknown report id."}), 400
+    if not table:
+        return jsonify({"success": False, "error": "Missing 'table'."}), 400
+
+    try:
+        table_fq = _fq_table(table)
+        sql = REPORTS[report_id]["sql"].replace("{table_fq}", table_fq)
+        columns, rows = _run_sql(sql, max_rows=limit)
+        return jsonify({
+            "success": True,
+            "columns": columns,
+            "rows": rows,
+            "row_count": len(rows)
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/download_report")
+@require_user
+def download_report():
+    """
+    Query params: ?report=<id>&table=<table>
+    Streams a CSV file for the selected report.
+    """
+    report_id = request.args.get("report")
+    table = request.args.get("table")
+    if report_id not in REPORTS or not table:
+        return "Missing or invalid parameters.", 400
+
+    try:
+        table_fq = _fq_table(table)
+        sql = REPORTS[report_id]["sql"].replace("{table_fq}", table_fq)
+        # No row limit for CSV; adjust if needed
+        job = bq_client.query(sql)
+        result = job.result()
+
+        out = io.StringIO()
+        writer = csv.writer(out)
+        columns = [f.name for f in result.schema]
+        writer.writerow(columns)
+        for row in result:
+            writer.writerow(list(row.values()))
+        out.seek(0)
+
+        # Send as file
+        return send_file(
+            io.BytesIO(out.read().encode("utf-8")),
+            mimetype="text/csv",
+            as_attachment=True,
+            download_name=f"{report_id}_{table}.csv"
+        )
+    except Exception as e:
+        return f"Error: {e}", 500
+
 
 # ===============================
 # 🔹 Start Flask App
